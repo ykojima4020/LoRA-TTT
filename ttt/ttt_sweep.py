@@ -11,12 +11,10 @@ import wandb
 sys.path.append('../')
 from ttt import TestTimeTrainer
 from evaluator.evaluator import ZeroShotImageNetEvaluator
-from factory import RILSMAECLIPFactory, PretrainedOpenCLIPFactory, PretrainedOpenCLIPDecoderEncoderFineTuneFactory
+from factory import RILSMAECLIPFactory, PretrainedOpenCLIPFactory, PretrainedOpenCLIPDecoderEncoderFineTuneFactory, \
+                    PretrainedHFOpenCLIPFactory
 from misc.config import load_config
 from omegaconf import OmegaConf
-
-from imagenetv2_pytorch import ImageNetV2Dataset
-from misc.transforms import Corruption, get_corruption_transform
 
 corruptions_name = ['brightness', 'contrast', 'defocus_blur', 'elastic_transform', 'fog',
                     'frost', 'gaussian_noise', 'glass_blur', 'impulse_noise', 'jpeg_compression',
@@ -28,7 +26,8 @@ columns = ['layer', 'lr', 'weight_decay', 'batch_size', 'epochs', 'optimizer', '
 def get_args_parser():
     parser = argparse.ArgumentParser('Evaluation on ImageNet-C', add_help=False)
     parser.add_argument('--cfg', type=str, required=True, help='path to a config file')
-    parser.add_argument('--type', default='normal', choices=['normal', 'open'], help='a kind of archtectures')
+    parser.add_argument('--type', default='open', choices=['normal', 'open', 'hf_open'], help='a kind of archtectures')
+    parser.add_argument('--reconst', default='feature', choices=['pixel', 'feature'], help='a kind of reconstruction')
     parser.add_argument('--wandb', action='store_true')
     parser.add_argument('--checkpoint', type=str, required=True, help='path to a pth file')
     parser.add_argument('--output', type=str, default='./output.csv', help='path to a output csv file')
@@ -36,8 +35,7 @@ def get_args_parser():
 
 def sweep():
     sweep_config = load_config('ttt_sweep.yaml')
-    sweep_id = wandb.sweep(OmegaConf.to_container(sweep_config, resolve=True),
-                           project="mae_clip_ttt")
+    sweep_id = wandb.sweep(OmegaConf.to_container(sweep_config, resolve=True), project="mae_clip_ttt")
     wandb.agent(sweep_id, main)
 
 def main():
@@ -65,20 +63,25 @@ def main():
         factory = RILSMAECLIPFactory(config.model)
     elif args.type == 'open':
         # factory = PretrainedOpenCLIPFactory(config.model)
-        factory = PretrainedOpenCLIPDecoderEncoderFineTuneFactory(config.model, mae='feature')
+        factory = PretrainedOpenCLIPDecoderEncoderFineTuneFactory(config.model, mae=args.reconst)
+    elif args.type == 'hf_open':
+        factory = PretrainedHFOpenCLIPFactory(config.model, mae=args.reconst, peft='lora')
     else:
         raise TypeError
 
-    model, tokenizer, _ = factory.create()
+    model, tokenizer, transform = factory.create()
     model = model.to(device)
-    # [NOTE]: freze CLIP parameters
+
+    # [NOTE]: freze parameters not related to TTTPretrainedHFOpenCLIPFactory
+    for name, param in model.named_parameters():
+        if ('decoder' in name):
+            param.requires_grad = False
+        if ('text_model.encoder' in name):
+            param.requires_grad = False
+        print(name, param.requires_grad)
+
     status = torch.load(args.checkpoint, map_location="cuda")
     severity = 5
-    transform = transforms.Compose(
-            [
-            transforms.ToTensor(),
-            transforms.Normalize(mean=(0.48145466, 0.4578275, 0.40821073), std=(0.26862954, 0.26130258, 0.27577711))
-            ])
 
     # [NOTE]: update only image encoder
     if config.optimizer == 'adam':
@@ -95,9 +98,10 @@ def main():
     nor_top5s = []
 
     for corruption in corruptions_name:
+        # [NOTE]: there's no corruption dataset named frost
         if corruption == 'frost':
             continue
-        dataset = torchvision.datasets.ImageFolder(root=f'/data2/yuto/dataset/imagenetv2-c/{corruption}/{severity}', transform=transform) 
+        dataset = torchvision.datasets.ImageFolder(root=f'~/dataset/imagenetv2-c/{corruption}/{severity}', transform=transform('valid')) 
         top1_before_ttt, top5_before_ttt, top1_after_ttt, top5_after_ttt = run_ttt_improvement(model, tokenizer, dataset, status, optimizer, epochs=config.epochs, batch_size=config.batch_size) 
 
         diff_top1 = top1_after_ttt - top1_before_ttt
@@ -157,5 +161,5 @@ def run_ttt_improvement(model, tokenizer, dataset, status, optimizer,
     return before_ttt_top1, before_ttt_top5, after_ttt_top1, after_ttt_top5
 
 if __name__ == "__main__":
-    main()
-    # sweep()
+    # main()
+    sweep()

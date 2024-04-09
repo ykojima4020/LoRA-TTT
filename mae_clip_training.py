@@ -13,13 +13,13 @@ from imagenetv2_pytorch import ImageNetV2Dataset
 
 from omegaconf import OmegaConf, read_write
 
-from factory import RILSMAECLIPFactory, PretrainedOpenCLIPFactory, PretrainedOpenCLIPDecoderFineTuneFactory, PretrainedOpenCLIPDecoderEncoderFineTuneFactory 
+from factory import RILSMAECLIPFactory, PretrainedOpenCLIPFactory, PretrainedOpenCLIPDecoderFineTuneFactory, PretrainedOpenCLIPDecoderEncoderFineTuneFactory
+from factory import PretrainedHFOpenCLIPFactory
 from data.dataloader_builder import CLIPDataLoaderBuilder, GCC3MDataLoaderBuilder
 from trainer.trainer import SimpleTrainer
 from trainer.validater import SimpleValidater
 from evaluator.evaluator import ZeroShotImageNetEvaluator
 
-from misc.utils import AvgMeter, get_lr
 from misc.config import get_config
 from misc.lr_scheduler import build_scheduler
 from misc.checkpoint import auto_resume_helper, load_checkpoint, save_checkpoint
@@ -29,7 +29,8 @@ from misc.optimizer import build_optimizer
 def get_args_parser():
     parser = argparse.ArgumentParser('CLIP pre-training', add_help=False)
     parser.add_argument('--cfg', type=str, required=True, help='path to a config file')
-    parser.add_argument('--type', default='open', choices=['normal', 'open'], help='a kind of archtectures')
+    parser.add_argument('--type', default='open', choices=['normal', 'open', 'hf_open'], help='a kind of archtectures')
+    parser.add_argument('--reconst', default='feature', choices=['pixel', 'feature'], help='a kind of reconstruction')
     parser.add_argument('--opts', help="Modify config options by adding 'KEY=VALUE' list. ", default=None, nargs='+')
     parser.add_argument('--test', action='store_true')
     parser.add_argument('--wandb', action='store_true')
@@ -68,17 +69,24 @@ def main(rank, world_size, cfg):
     # [NOTE]: waiting wandb init
     dist.barrier()
 
+    # [NOTE]: organize how factory and model are created.
     if cfg.type == 'normal':
         factory = RILSMAECLIPFactory(cfg.model)
     elif cfg.type == 'open':
         # factory = PretrainedOpenCLIPFactory(cfg.model)
-        # factory = PretrainedOpenCLIPDecoderFineTuneFactory(cfg.model, mae='feature')
-        factory = PretrainedOpenCLIPDecoderEncoderFineTuneFactory(cfg.model, mae='feature')
+        # factory = PretrainedOpenCLIPDecoderFineTuneFactory(cfg.model, mae=cfg.reconst)
+        factory = PretrainedOpenCLIPDecoderEncoderFineTuneFactory(cfg.model, mae=cfg.reconst)
+    elif args.type == 'hf_open':
+        factory = PretrainedHFOpenCLIPFactory(cfg.model, mae=cfg.reconst, peft='lora')
     else:
         raise TypeError
 
     model, tokenizer, transform = factory.create()
     model = model.to(rank)
+
+    for name, param in model.named_parameters():
+        if ('decoder' in name):
+            param.requires_grad = True
 
     if dist.get_rank() == 0:
         for name, param in model.named_parameters():

@@ -159,7 +159,7 @@ class MAEPixelDecoder(torch.nn.Module):
         features = rearrange(features, 't b c -> b t c')
         features = self.transformer(features)
         features = rearrange(features, 'b t c -> t b c')
-        features = features[0] # extract global feature
+        features = features[1:] # remove global feature
 
         patches = self.head(features)
         mask = torch.zeros_like(patches)

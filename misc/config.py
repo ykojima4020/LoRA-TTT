@@ -57,4 +57,7 @@ def get_config(args):
     if hasattr(args, 'type') and args.type:
         cfg.type = args.type
 
+    if hasattr(args, 'reconst') and args.reconst:
+        cfg.reconst = args.reconst
+
     return cfg

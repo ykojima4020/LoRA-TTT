@@ -11,6 +11,7 @@ class TestTimeTrainer():
         self._mae_loss_meter = AvgMeter()
 
     def __call__(self, model):
+        model = model.train()
         tqdm_object = tqdm(self._data_loader, total=len(self._data_loader))
         for idx, (images, target) in enumerate(tqdm_object):
             images = images.to(self._device)

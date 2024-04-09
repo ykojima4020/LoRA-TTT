@@ -1,5 +1,6 @@
 import open_clip
 from transformers import DistilBertTokenizer
+from transformers import CLIPModel, CLIPProcessor
 
 from model.clip import CLIP
 from model.modules import TextEncoder, ProjectionHead
@@ -8,9 +9,13 @@ from model.mae_clip import MAECLIP
 
 from model.models_rils import RILSMAEEncoder
 from model.open_clip import OpenCLIPImageEncoder, OpenCLIPImageProjector, OpenCLIP
+from model.hf_open_clip import HFOpenCLIPImageEncoder, HFOpenCLIPImageProjector, HFOpenCLIP
 from model.tokenizer import BertTokenizer, OpenCLIPTokenizer
 
 from misc.transforms import get_original_vit_image_encoder_transforms, get_open_clip_vitb16_transforms
+
+# [NOTE]: LoRA
+from peft import LoraConfig, get_peft_model
 
 class Factory:
     def __init__(self, cfg):
@@ -188,4 +193,86 @@ class PretrainedOpenCLIPDecoderEncoderFineTuneFactory(Factory):
                     param.requires_grad = False
         '''
 
+        return model, tokenizer, transform
+
+
+class PretrainedHFOpenCLIPFactory(Factory):
+    def __init__(self, cfg, mae='pixel', peft='lora'):
+        # [NOTE]: need to create a decoder
+        self._image_size = cfg.image.encoder.size
+        self._patch_size = cfg.image.encoder.patch_size
+        self._emb_dim = cfg.image.encoder.embeddings
+        self._decoder_layer = cfg.image.decoder.layer
+        self._decoder_head = cfg.image.decoder.head
+
+        self._alpha = cfg.loss.alpha
+        self._mask_ratio = cfg.mae.mask_ratio
+        self._temperature = cfg.clip.temperature
+
+        # [TODO]: this parameter should be managed in the config.
+        self._mae = mae
+        self._peft = peft
+
+    def create(self):
+
+        # [NOTE]: I don't know what kinds of dataset are used in the model.
+        hf_open_clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch16")
+        processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch16")
+
+        image_encoder = HFOpenCLIPImageEncoder(hf_open_clip_model.vision_model)
+        image_projector = HFOpenCLIPImageProjector(hf_open_clip_model.visual_projection)
+        clip = HFOpenCLIP(image_encoder, image_projector, hf_open_clip_model, self._temperature)
+
+
+        if self._mae == 'pixel':
+            image_decoder = MAEPixelDecoder(
+                image_size=self._image_size, patch_size=self._patch_size,
+                emb_dim=self._emb_dim, num_layer=self._decoder_layer,
+                num_head=self._decoder_head)
+            mae = PixelMAE(image_encoder, image_decoder, self._mask_ratio)
+        elif self._mae == 'feature':
+            image_decoder = MAEFeatureDecoder(
+                image_size=self._image_size, patch_size=self._patch_size,
+                emb_dim=self._emb_dim, num_layer=self._decoder_layer,
+                num_head=self._decoder_head)
+            mae = FeatureMAE(image_encoder, image_decoder, self._mask_ratio)
+        else:
+            raise TypeError(f'{self._mae} is invalid.')
+
+        # [NOTE]: creating model...
+        model = MAECLIP(image_encoder, clip, mae, alpha=self._alpha)
+
+        if self._peft == 'lora':
+            # [TODO]: PEFT config should be set from external file
+            config = LoraConfig(r=2,
+                 target_modules=["k_proj", "v_proj", "q_proj", "out_proj"],
+                 lora_dropout=0.01,
+                 bias="none"
+                 )
+            model = get_peft_model(model, config)
+            # [TODO]: LoRA parameters depend on pixel or feature.
+        elif self._peft is False:
+            pass
+        else:
+            raise TypeError(f'{self._peft} is not supported.')
+
+        # [NOTE]: trainable parameter settings
+        for name, param in model.named_parameters():
+            if ('decoder' in name):
+                param.requires_grad = True
+
+        if self._mae == 'feature':
+            for name, param in model.named_parameters():
+                if ('ema' in name):
+                    param.requires_grad = False
+
+        # [TODO]: I don't know logit_scale should be trainable or not.
+        # elif ('logit_scale' in name):
+        #     param.requires_grad = True
+
+        tokenizer = processor.tokenizer
+        tokenizer = BertTokenizer(tokenizer)
+
+        # [TODO]: should be set transform designed for
+        transform = get_open_clip_vitb16_transforms
         return model, tokenizer, transform
