@@ -76,8 +76,8 @@ def main(rank, world_size, cfg):
         # factory = PretrainedOpenCLIPFactory(cfg.model)
         # factory = PretrainedOpenCLIPDecoderFineTuneFactory(cfg.model, mae=cfg.reconst)
         factory = PretrainedOpenCLIPDecoderEncoderFineTuneFactory(cfg.model, mae=cfg.reconst)
-    elif args.type == 'hf_open':
-        factory = PretrainedHFOpenCLIPFactory(cfg.model, mae=cfg.reconst, peft='lora')
+    elif cfg.type == 'hf_open':
+        factory = PretrainedHFOpenCLIPFactory(cfg.model, mae=cfg.reconst)
     else:
         raise TypeError
 

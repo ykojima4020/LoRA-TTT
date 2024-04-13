@@ -65,7 +65,7 @@ def main():
         # factory = PretrainedOpenCLIPFactory(config.model)
         factory = PretrainedOpenCLIPDecoderEncoderFineTuneFactory(config.model, mae=args.reconst)
     elif args.type == 'hf_open':
-        factory = PretrainedHFOpenCLIPFactory(config.model, mae=args.reconst, peft='lora')
+        factory = PretrainedHFOpenCLIPFactory(config.model, mae=args.reconst)
     else:
         raise TypeError
 
