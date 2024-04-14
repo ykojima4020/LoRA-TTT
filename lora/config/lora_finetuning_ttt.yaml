@@ -1,0 +1,56 @@
+_base_: '../../config/default_local.yaml'
+
+model:
+  image:
+    encoder:
+      name: 'vit-b'
+      size: 224
+      patch_size: 16
+      embeddings: 768
+      layer: 12
+      head: 12
+    decoder:
+      layer: 8
+      head: 16
+      embeddings: 512
+  text:
+    encoder:
+      name: 'distilbert-base-uncased' 
+      pretrained: true
+      trainable: false
+      embeddings: 768
+  clip:
+    projection: 256
+    dropout: 0.1
+    temperature: 1
+  mae:
+    mask_ratio: 0.75
+  loss:
+    alpha: 1
+  peft:
+    name: 'lora'
+    r: 4
+    alpha: 8
+    target_modules: ["k_proj", "v_proj", "q_proj", "out_proj"]
+    dropout: 0.01
+
+train:
+  start_epoch: 0
+  epochs: 20
+  warmup_epochs: 2
+  lr: 1e-4
+  weight_decay: 0.05
+  warmup_lr: 1e-6
+  min_lr: 1e-7
+  clip_grad: 0.1
+
+  lr_scheduler:
+    name: cosine
+
+ttt:
+  lr: 1e-3
+  weight_decay: 0.2
+  batch_size: 128
+  epochs: 50
+  optimizer: 'sgd'
+  run_freq: 2
