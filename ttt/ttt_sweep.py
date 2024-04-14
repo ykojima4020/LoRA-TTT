@@ -69,28 +69,8 @@ def main():
     else:
         raise TypeError
 
-    model, tokenizer, transform = factory.create()
-    model = model.to(device)
-
-    # [NOTE]: freze parameters not related to TTTPretrainedHFOpenCLIPFactory
-    for name, param in model.named_parameters():
-        if ('decoder' in name):
-            param.requires_grad = False
-        if ('text_model.encoder' in name):
-            param.requires_grad = False
-        print(name, param.requires_grad)
-
     status = torch.load(args.checkpoint, map_location="cuda")
     severity = 5
-
-    # [NOTE]: update only image encoder
-    if config.optimizer == 'adam':
-        optimizer = torch.optim.AdamW(model.image_encoder.parameters(),
-                eps=eps, lr=config.lr, betas=(0.9, 0.95), weight_decay=config.weight_decay)
-    elif config.optimizer == 'sgd':
-        optimizer = torch.optim.SGD(model.image_encoder.parameters(), lr=config.lr, weight_decay=config.weight_decay) 
-    else:
-        raise TypeError
 
     diff_top1s = []
     diff_top5s = []
@@ -101,8 +81,7 @@ def main():
         # [NOTE]: there's no corruption dataset named frost
         if corruption == 'frost':
             continue
-        dataset = torchvision.datasets.ImageFolder(root=f'~/dataset/imagenetv2-c/{corruption}/{severity}', transform=transform('valid')) 
-        top1_before_ttt, top5_before_ttt, top1_after_ttt, top5_after_ttt = run_ttt_improvement(model, tokenizer, dataset, status, optimizer, epochs=config.epochs, batch_size=config.batch_size) 
+        top1_before_ttt, top5_before_ttt, top1_after_ttt, top5_after_ttt = run_ttt_improvement(factory, status, config, corruption, severity)
 
         diff_top1 = top1_after_ttt - top1_before_ttt
         diff_top5 = top5_after_ttt - top5_before_ttt
@@ -133,15 +112,34 @@ def main():
     del model
     torch.cuda.empty_cache()
 
-def run_ttt_improvement(model, tokenizer, dataset, status, optimizer,
-                        epochs=1, batch_size=64, num_workers=4, pin_memory=True,
-                        mask_ratio=0.75, device='cuda'):
+def run_ttt_improvement(factory, status, config, corruption, severity,
+                        num_workers=4, pin_memory=True, device='cuda'):
+
     # [TODO]: evaluator and trainer should be provided as arguments.
+    model, tokenizer, transform = factory.create()
+    model = model.to(device)
+
+    # [NOTE]: freze parameters not related to TTTPretrainedHFOpenCLIPFactory
+    for name, param in model.named_parameters():
+        if ('decoder' in name):
+            param.requires_grad = False
+        if ('text_model.encoder' in name):
+            param.requires_grad = False
+        print(name, param.requires_grad)
+
+    # [NOTE]: update only image encoder
+    if config.optimizer == 'adam':
+        optimizer = torch.optim.AdamW(model.image_encoder.parameters(),
+                eps=eps, lr=config.lr, betas=(0.9, 0.95), weight_decay=config.weight_decay)
+    elif config.optimizer == 'sgd':
+        optimizer = torch.optim.SGD(model.image_encoder.parameters(), lr=config.lr, weight_decay=config.weight_decay) 
+    else:
+        raise TypeError
 
     # [NOTE]: initialization
-    model.load_state_dict(status['model'])
+    dataset = torchvision.datasets.ImageFolder(root=f'/data2/yuto/dataset/imagenetv2-c/{corruption}/{severity}', transform=transform('valid')) 
     evaluator = ZeroShotImageNetEvaluator(tokenizer, device, dataset)
-    train_loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, num_workers=num_workers, pin_memory=pin_memory)
+    train_loader = torch.utils.data.DataLoader(dataset, batch_size=config.batch_size, num_workers=num_workers, pin_memory=pin_memory)
     tttrainer = TestTimeTrainer(train_loader, optimizer, device)
 
     # [NOTE]: STEP1: Evaluation of initial model before TTT.
@@ -149,8 +147,11 @@ def run_ttt_improvement(model, tokenizer, dataset, status, optimizer,
     before_ttt_top1 = before_ttt['eval']['imagenet']['top1']
     before_ttt_top5 = before_ttt['eval']['imagenet']['top5']
 
+    # [NOTE]: after culculation original zero-shot performance, load the finetuned weights.
+    model.load_state_dict(status['model'])
+
     # [NOTE]: STEP2: TTT
-    for epoch in range(0, epochs):
+    for epoch in range(0, config.epochs):
         tttrainer(model.mae)
 
     # [NOTE]: STEP3: Evaluation of model after TTT.
