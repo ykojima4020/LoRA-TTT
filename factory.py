@@ -197,7 +197,7 @@ class PretrainedOpenCLIPDecoderEncoderFineTuneFactory(Factory):
 
 
 class PretrainedHFOpenCLIPFactory(Factory):
-    def __init__(self, cfg, mae='pixel', peft='lora'):
+    def __init__(self, cfg, mae='pixel'):
         # [NOTE]: need to create a decoder
         self._image_size = cfg.image.encoder.size
         self._patch_size = cfg.image.encoder.patch_size
@@ -211,7 +211,10 @@ class PretrainedHFOpenCLIPFactory(Factory):
 
         # [TODO]: this parameter should be managed in the config.
         self._mae = mae
-        self._peft = peft
+
+        self._peft = None
+        if 'peft' in cfg:
+            self._peft = cfg.peft
 
     def create(self):
 
@@ -222,7 +225,6 @@ class PretrainedHFOpenCLIPFactory(Factory):
         image_encoder = HFOpenCLIPImageEncoder(hf_open_clip_model.vision_model)
         image_projector = HFOpenCLIPImageProjector(hf_open_clip_model.visual_projection)
         clip = HFOpenCLIP(image_encoder, image_projector, hf_open_clip_model, self._temperature)
-
 
         if self._mae == 'pixel':
             image_decoder = MAEPixelDecoder(
@@ -242,19 +244,15 @@ class PretrainedHFOpenCLIPFactory(Factory):
         # [NOTE]: creating model...
         model = MAECLIP(image_encoder, clip, mae, alpha=self._alpha)
 
-        if self._peft == 'lora':
-            # [TODO]: PEFT config should be set from external file
-            config = LoraConfig(r=2,
-                 target_modules=["k_proj", "v_proj", "q_proj", "out_proj"],
-                 lora_dropout=0.01,
-                 bias="none"
-                 )
+        if self._peft.name == 'lora':
+            config = LoraConfig(r=self._peft.r,
+                                target_modules=self._peft.target_modules,
+                                lora_alpha=self._peft.alpha,
+                                lora_dropout=self._peft.dropout,
+                               )
             model = get_peft_model(model, config)
-            # [TODO]: LoRA parameters depend on pixel or feature.
-        elif self._peft is False:
-            pass
         else:
-            raise TypeError(f'{self._peft} is not supported.')
+            raise TypeError(f'{self._peft.name} is not supported.')
 
         # [NOTE]: trainable parameter settings
         for name, param in model.named_parameters():
