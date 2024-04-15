@@ -24,7 +24,6 @@ def get_original_vit_image_encoder_transforms(mode):
 
 def get_open_clip_vitb16_transforms(mode):
     _, train, val = open_clip.create_model_and_transforms('ViT-B-16', pretrained='datacomp_l_s1b-b8k')
-    print('open_clip transforms loaded.')
     if mode == "train":
         return train
     else:

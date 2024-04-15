@@ -9,16 +9,17 @@ import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 import torch.multiprocessing as mp
 import open_clip
+from imagenetv2_pytorch import ImageNetV2Dataset
 
 from omegaconf import OmegaConf, read_write
 
-from factory import RILSMAECLIPFactory, PretrainedOpenCLIPFactory
+from factory import RILSMAECLIPFactory, PretrainedOpenCLIPFactory, PretrainedOpenCLIPDecoderFineTuneFactory, PretrainedOpenCLIPDecoderEncoderFineTuneFactory
+from factory import PretrainedHFOpenCLIPFactory
 from data.dataloader_builder import CLIPDataLoaderBuilder, GCC3MDataLoaderBuilder
 from trainer.trainer import SimpleTrainer
 from trainer.validater import SimpleValidater
 from evaluator.evaluator import ZeroShotImageNetEvaluator
 
-from misc.utils import AvgMeter, get_lr
 from misc.config import get_config
 from misc.lr_scheduler import build_scheduler
 from misc.checkpoint import auto_resume_helper, load_checkpoint, save_checkpoint
@@ -28,7 +29,8 @@ from misc.optimizer import build_optimizer
 def get_args_parser():
     parser = argparse.ArgumentParser('CLIP pre-training', add_help=False)
     parser.add_argument('--cfg', type=str, required=True, help='path to a config file')
-    parser.add_argument('--type', default='normal', choices=['normal', 'open'], help='a kind of archtectures')
+    parser.add_argument('--type', default='open', choices=['normal', 'open', 'hf_open'], help='a kind of archtectures')
+    parser.add_argument('--reconst', default='feature', choices=['pixel', 'feature'], help='a kind of reconstruction')
     parser.add_argument('--opts', help="Modify config options by adding 'KEY=VALUE' list. ", default=None, nargs='+')
     parser.add_argument('--test', action='store_true')
     parser.add_argument('--wandb', action='store_true')
@@ -50,7 +52,7 @@ def main(rank, world_size, cfg):
     logger.info(f"Running train on rank {rank}.")
 
     if dist.get_rank() == 0:
-        print(cfg)
+        logger.info(cfg)
 
     if not cfg.train.lr:
         cfg.train.lr = cfg.train.base_lr * cfg.data.batch_size * world_size / 256 # 1e-3 * 64 / 256 = 0.00025
@@ -67,10 +69,13 @@ def main(rank, world_size, cfg):
     # [NOTE]: waiting wandb init
     dist.barrier()
 
+    # [NOTE]: organize how factory and model are created.
     if cfg.type == 'normal':
         factory = RILSMAECLIPFactory(cfg.model)
     elif cfg.type == 'open':
-        factory = PretrainedOpenCLIPFactory(cfg.model)
+        factory = PretrainedOpenCLIPDecoderEncoderFineTuneFactory(cfg.model, mae=cfg.reconst)
+    elif cfg.type == 'hf_open':
+        factory = PretrainedHFOpenCLIPFactory(cfg.model, mae=cfg.reconst)
     else:
         raise TypeError
 
@@ -78,13 +83,14 @@ def main(rank, world_size, cfg):
     model = model.to(rank)
 
     for name, param in model.named_parameters():
-        if 'decoder' in name:
+        if ('decoder' in name):
             param.requires_grad = True
-        else:
-            param.requires_grad = False
-        print(name, param.requires_grad)
 
-    ddp_model = DDP(model, device_ids=[rank])
+    if dist.get_rank() == 0:
+        for name, param in model.named_parameters():
+            logger.info(f'{name}: {param.requires_grad}')
+
+    ddp_model = DDP(model, device_ids=[rank], find_unused_parameters=True)
     model_without_ddp = ddp_model.module
 
     dataloader_builder = CLIPDataLoaderBuilder(cfg.data, tokenizer, transform)
@@ -101,7 +107,8 @@ def main(rank, world_size, cfg):
     trainer = SimpleTrainer(train_loader, optimizer, lr_scheduler, cfg.train.clip_grad, rank)
     validater = SimpleValidater(val_loader, optimizer, rank)
     if dist.get_rank() == 0:
-        evaluator = ZeroShotImageNetEvaluator(tokenizer, rank)
+        dataset = ImageNetV2Dataset(transform=transform('valid')) 
+        evaluator = ZeroShotImageNetEvaluator(tokenizer, rank, dataset)
 
 
     if cfg.checkpoint.auto_resume:
@@ -153,6 +160,7 @@ def main(rank, world_size, cfg):
             # [TODO]: This metric should be flexible.
             if stats['valid']['mae_loss'] < best_loss:
                 # best_acc_1 = stats['eval']['imagenet']['top1']
+                best_loss = stats['valid']['mae_loss']
                 save_checkpoint(cfg, epoch, model_without_ddp, {
                     'val_loss': stats['valid']['mae_loss'],
                     'acc_1': stats['eval']['imagenet']['top1'],
@@ -164,9 +172,6 @@ def main(rank, world_size, cfg):
             wandb.log(stats)
             wandb.log({'image': table})
         dist.barrier()
-
-    if cfg.wandb and dist.get_rank() == 0:
-        run.finish()
 
     cleanup()
 

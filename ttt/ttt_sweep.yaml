@@ -1,0 +1,31 @@
+program: ttt_sweep.py
+method: 'random'
+metric:
+  name: 'diff_top5'
+  goal: 'maximize'
+parameters:
+  ttt:
+    parameters:
+      lr:
+        values: [5e-3, 5e-4]
+      weight_decay:
+        values: [0.2, 0.02]
+      batch_size:
+        values: [128]
+      epochs:
+        values: [1]
+      optimizer:
+        values: ['sgd']
+
+command:
+  - "python"
+  - ${program}
+  - "--cfg"
+  - "config/ttt.yaml"
+  - "--wandb"
+  - "--checkpoint"
+  - "../output/20240402_decoder_layer8_encoder_lora_finetune_feature_recon_hf_open_clip_cc3m_wd_0001_blr_1e5/checkpoint.pth"
+  - "--type"
+  - "hf_open"
+  - "--reconst"
+  - "feature"

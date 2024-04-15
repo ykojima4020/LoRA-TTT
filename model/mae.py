@@ -4,6 +4,7 @@ This code refers to https://github.com/ykojima4020/tta_mae_detection/blob/main/m
 
 import torch
 import timm
+from timm.utils import ModelEmaV2
 import numpy as np
 
 from einops import repeat, rearrange
@@ -44,7 +45,7 @@ class PatchShuffle(torch.nn.Module):
 
         return patches, forward_indexes, backward_indexes
 
-class MAE_Encoder(torch.nn.Module):
+class ImageEncoder(torch.nn.Module):
     def __init__(self,
                  image_size=32,
                  patch_size=2,
@@ -86,7 +87,45 @@ class MAE_Encoder(torch.nn.Module):
 
         return features, backward_indexes
 
-class MAE_Decoder(torch.nn.Module):
+class MAEFeatureDecoder(torch.nn.Module):
+    def __init__(self,
+                 image_size=32,
+                 patch_size=2,
+                 emb_dim=192,
+                 num_layer=4,
+                 num_head=3,
+                 ) -> None:
+        super().__init__()
+
+        self.mask_token = torch.nn.Parameter(torch.zeros(1, 1, emb_dim))
+        self.pos_embedding = torch.nn.Parameter(torch.zeros((image_size // patch_size) ** 2 + 1, 1, emb_dim))
+
+        self.transformer = torch.nn.Sequential(*[Block(emb_dim, num_head) for _ in range(num_layer)])
+
+        self.head = torch.nn.Linear(emb_dim, 3 * patch_size ** 2)
+        self.patch2img = Rearrange('(h w) b (c p1 p2) -> b c (h p1) (w p2)', p1=patch_size, p2=patch_size, h=image_size//patch_size)
+
+        self.init_weight()
+
+    def init_weight(self):
+        trunc_normal_(self.mask_token, std=.02)
+        trunc_normal_(self.pos_embedding, std=.02)
+
+    def forward(self, features, backward_indexes):
+        T = features.shape[0]
+        backward_indexes = torch.cat([torch.zeros(1, backward_indexes.shape[1]).to(backward_indexes), backward_indexes + 1], dim=0)
+        features = torch.cat([features, self.mask_token.expand(backward_indexes.shape[0] - features.shape[0], features.shape[1], -1)], dim=0)
+        features = take_indexes(features, backward_indexes)
+        features = features + self.pos_embedding
+
+        features = rearrange(features, 't b c -> b t c')
+        features = self.transformer(features)
+        features = rearrange(features, 'b t c -> t b c')
+        features = features[0] # extract global feature
+
+        return features, None
+
+class MAEPixelDecoder(torch.nn.Module):
     def __init__(self,
                  image_size=32,
                  patch_size=2,
@@ -131,16 +170,42 @@ class MAE_Decoder(torch.nn.Module):
 
         return img, mask
 
-class MAE_ViT(torch.nn.Module):
+class PixelMAE(torch.nn.Module):
     def __init__(self, encoder, decoder, mask_ratio) -> None: 
         super().__init__()
 
         self._shuffler = PatchShuffle(mask_ratio)
         self.encoder = encoder 
         self.decoder = decoder
+        self.mask_ratio = mask_ratio
 
-    def forward(self, img):
-        features, backward_indexes = self.encoder(img, self._shuffler)
-        predicted_img, mask = self.decoder(features,  backward_indexes)
-        return predicted_img, mask
+    def forward(self, image):
+        features, backward_indexes = self.encoder(image, self._shuffler)
+        reconstruction, mask = self.decoder(features,  backward_indexes)
+        loss = torch.mean((reconstruction - image) ** 2 * mask) / self.mask_ratio
+        return loss, reconstruction, mask
 
+class FeatureMAE(torch.nn.Module):
+    def __init__(self, encoder, decoder, mask_ratio, decay=0.9999) -> None: 
+        super().__init__()
+
+        self._shuffler = PatchShuffle(mask_ratio)
+        self.encoder = encoder 
+        self.ema = ModelEmaV2(self.encoder, decay=decay)
+        self.decoder = decoder
+        self.mask_ratio = mask_ratio
+
+    def forward(self, image):
+        # [TODO]: only proceed if model.train()
+        if self.training:
+            self.ema.update(self.encoder)
+
+        # [NOTE]: extract class token features from EMA encoder
+        image_features = self.ema.module(image)[0][0, :, :]
+
+        features, backward_indexes = self.encoder(image, self._shuffler)
+        reconstruction, mask = self.decoder(features,  backward_indexes)
+
+        loss = torch.mean((reconstruction - image_features) ** 2) / self.mask_ratio
+        # [NOTE]: output image as dummy
+        return loss, image, mask

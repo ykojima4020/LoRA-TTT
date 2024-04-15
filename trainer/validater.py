@@ -1,3 +1,4 @@
+import torch
 from tqdm import tqdm
 from misc.utils import AvgMeter, get_lr
 import wandb
@@ -28,8 +29,8 @@ class SimpleValidater(Validater):
         tqdm_object = tqdm(self._data_loader, total=len(self._data_loader))
         for batch in tqdm_object:
             batch = {k: v.to(self._device) for k, v in batch.items() if k != "caption"}
-    
-            loss, clip_loss, mae_loss, reconstructed_img, logit_scale = model(batch)
+            with torch.no_grad():
+                loss, clip_loss, mae_loss, reconstructed_img, logit_scale = model(batch)
             count = batch["image"].size(0)
             self._loss_meter.update(loss.item(), count)
             self._clip_loss_meter.update(clip_loss.item(), count)

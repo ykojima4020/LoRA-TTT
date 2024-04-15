@@ -23,6 +23,7 @@ class OpenCLIPImageEncoder(nn.Module):
         self.ln_pre = model.visual.ln_pre
         self.ln_post = model.visual.ln_post
 
+        # [NOTE]: proj is not needed in OpenCLIPImageEncoder 
         self.proj = model.visual.proj
 
     def forward(self, x, shuffler=None): 
