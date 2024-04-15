@@ -1,0 +1,29 @@
+_base_: 'default.yaml'
+
+model:
+  image:
+    encoder:
+      name: 'vit-b'
+      size: 224
+      patch_size: 16
+      embeddings: 768
+      layer: 12
+      head: 12
+    decoder:
+      layer: 1
+      head: 12
+  text:
+    encoder:
+      name: 'distilbert-base-uncased' 
+      pretrained: true
+      trainable: false
+      embeddings: 768
+  clip:
+    projection: 256
+    dropout: 0.1
+    temperature: 1
+  mae:
+    mask_ratio: 0.75
+  loss:
+    alpha: 1
+

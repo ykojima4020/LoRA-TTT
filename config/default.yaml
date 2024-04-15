@@ -1,0 +1,89 @@
+data:
+  batch_size: 256
+  pin_memory: true
+  num_workers: 6
+  shuffle_buffer: 10000
+  seed: ${train.seed}
+  dataset:
+    train_image_path: 'path'
+    train_json: 'path'
+    val_image_path: 'path'
+    val_json: 'path'
+
+    meta:
+      gcc3m:
+        type: img_txt_pair
+        path: 'path'
+        prefix: gcc-train-{000000..001242}.tar
+        length: 2248678
+
+    train:
+      - gcc3m
+
+  img_aug:
+  text_aug:
+    max_seq_len: 77
+
+train:
+  start_epoch: 0
+  epochs: 50
+  warmup_epochs: 2
+  lr: null
+  base_lr: 1e-3
+  weight_decay: 0.05
+  warmup_lr: 4e-6
+  min_lr: 4e-5
+  clip_grad: 0.1
+  seed: 0
+
+  lr_scheduler:
+    name: cosine
+
+  optimizer:
+    param_groups: false
+    name: adamw
+    eps: 1e-8
+    betas: [0.9, 0.999]
+
+model:
+  image:
+    encoder:
+      name: 'vit'
+      size: 224
+      patch_size: 14
+      embeddings: 512
+  text:
+    encoder:
+      name: 'distilbert-base-uncased' 
+      pretrained: true
+      trainable: false
+      embeddings: 768
+  clip:
+    projection: 256
+    dropout: 0.1
+    temperature: 1
+  mae:
+    mask_ratio: 0.75
+  loss:
+    alpha: 1
+  peft:
+    name: 'lora'
+    r: 2
+    alpha: 4
+    target_modules: ["k_proj", "v_proj", "q_proj", "out_proj"]
+    dropout: 0.01
+
+checkpoint:
+  auto_resume: true
+  resume: ''
+  max_kept: -1
+
+model_name: '' # display name in the logger
+test: false
+output: './tmp'
+seed: 0
+wandb: false
+device: 'cuda'
+world_size: 1
+type: 'normal'
+reconst: 'feature'
