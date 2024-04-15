@@ -52,7 +52,7 @@ def main(rank, world_size, cfg):
     logger.info(f"Running train on rank {rank}.")
 
     if dist.get_rank() == 0:
-        print(cfg)
+        logger.info(cfg)
 
     if not cfg.train.lr:
         cfg.train.lr = cfg.train.base_lr * cfg.data.batch_size * world_size / 256 # 1e-3 * 64 / 256 = 0.00025
@@ -73,8 +73,6 @@ def main(rank, world_size, cfg):
     if cfg.type == 'normal':
         factory = RILSMAECLIPFactory(cfg.model)
     elif cfg.type == 'open':
-        # factory = PretrainedOpenCLIPFactory(cfg.model)
-        # factory = PretrainedOpenCLIPDecoderFineTuneFactory(cfg.model, mae=cfg.reconst)
         factory = PretrainedOpenCLIPDecoderEncoderFineTuneFactory(cfg.model, mae=cfg.reconst)
     elif cfg.type == 'hf_open':
         factory = PretrainedHFOpenCLIPFactory(cfg.model, mae=cfg.reconst)
@@ -90,7 +88,7 @@ def main(rank, world_size, cfg):
 
     if dist.get_rank() == 0:
         for name, param in model.named_parameters():
-            print(name, param.requires_grad)
+            logger.info(f'{name}: {param.requires_grad}')
 
     ddp_model = DDP(model, device_ids=[rank], find_unused_parameters=True)
     model_without_ddp = ddp_model.module
@@ -162,6 +160,7 @@ def main(rank, world_size, cfg):
             # [TODO]: This metric should be flexible.
             if stats['valid']['mae_loss'] < best_loss:
                 # best_acc_1 = stats['eval']['imagenet']['top1']
+                best_loss = stats['valid']['mae_loss']
                 save_checkpoint(cfg, epoch, model_without_ddp, {
                     'val_loss': stats['valid']['mae_loss'],
                     'acc_1': stats['eval']['imagenet']['top1'],

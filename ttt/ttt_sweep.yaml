@@ -4,27 +4,28 @@ metric:
   name: 'diff_top5'
   goal: 'maximize'
 parameters:
-  lr:
-    values: [5e-3, 5e-4]
-  weight_decay:
-    values: [0.2, 0.02]
-  batch_size:
-    values: [128]
-  epochs:
-    values: [1] 
-  optimizer:
-    values: ['sgd'] 
-  layer:
-    values: [-1, 3, 7, 11]
+  ttt:
+    parameters:
+      lr:
+        values: [5e-3, 5e-4]
+      weight_decay:
+        values: [0.2, 0.02]
+      batch_size:
+        values: [128]
+      epochs:
+        values: [1]
+      optimizer:
+        values: ['sgd']
 
 command:
-  - ${env}
-  - ${interpreter}
+  - "python"
   - ${program}
   - "--cfg"
-  - "config/model.yaml"
+  - "config/ttt.yaml"
   - "--wandb"
   - "--checkpoint"
-  - "../output/20240304_decoder_layer8_finetune_datacomp_l_s1b-b8k/checkpoint.pth"
+  - "../output/20240402_decoder_layer8_encoder_lora_finetune_feature_recon_hf_open_clip_cc3m_wd_0001_blr_1e5/checkpoint.pth"
   - "--type"
-  - "open"
+  - "hf_open"
+  - "--reconst"
+  - "feature"

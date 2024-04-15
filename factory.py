@@ -247,7 +247,7 @@ class PretrainedHFOpenCLIPFactory(Factory):
         if self._peft.name == 'lora':
             config = LoraConfig(r=self._peft.r,
                                 target_modules=self._peft.target_modules,
-                                lora_alpha=self._peft.alpha,
+                                lora_alpha=(self._peft.r * self._peft.alpha_r_scale),
                                 lora_dropout=self._peft.dropout,
                                )
             model = get_peft_model(model, config)
