@@ -46,11 +46,6 @@ def get_args_parser():
                         help='path where to save, empty for no saving')
     return parser
 
-def sweep():
-    sweep_config = load_config('lora_finetuning_ttt_sweep.yaml')
-    sweep_id = wandb.sweep(OmegaConf.to_container(sweep_config, resolve=True), project="mae_clip_lora_finetuning")
-    wandb.agent(sweep_id, main)
-
 def process(rank, world_size, cfg):
 
     setup(rank, world_size)
@@ -62,6 +57,7 @@ def process(rank, world_size, cfg):
         cfg.train.lr = cfg.train.base_lr * cfg.data.batch_size * world_size / 256 # 1e-3 * 64 / 256 = 0.00025
 
     if cfg.wandb and dist.get_rank() == 0:
+        import wandb
         run = wandb.init(project='mae_clip_lora_finetuning',
                          entity="ykojima",
                          dir=cfg.output,
@@ -97,6 +93,7 @@ def process(rank, world_size, cfg):
     gcc3m_dataloader_builder = GCC3MDataLoaderBuilder(cfg.data, tokenizer, transform)
 
     train_loader, train_sampler = gcc3m_dataloader_builder('train', rank, world_size, test=cfg.test)
+
     val_loader, _ = dataloader_builder(cfg.data.dataset.val_image_path,
                                       cfg.data.dataset.val_json, 'val', rank, world_size, test=cfg.test)
 
@@ -146,17 +143,17 @@ def process(rank, world_size, cfg):
 
         ddp_model.eval()
         with torch.no_grad():
-            valid_stats, table = validater(ddp_model)
+            valid_stats, image_table = validater(ddp_model)
             stats = stats | valid_stats
 
         # [NOTE]: evaluation, ttt, and saving
         if dist.get_rank() == 0:
             status = {'model': model_without_ddp.state_dict()}
 
-            if (epoch % cfg.ttt.run_freq == 0):
+            if ((epoch+1) % cfg.ttt.run_freq == 0):
                 ds = cfg.data.dataset['ttt'][0]
                 ds_meta = cfg.data.dataset.meta[ds]
-                ttt_stats = run_ttt(factory, status, cfg.ttt, ds_meta)
+                ttt_stats, ttt_table = run_ttt(factory, status, cfg.ttt, ds_meta)
                 stats = stats | ttt_stats
                 if stats['ttt']['diff_top5'] > best_ttt_enhancement:
                     best_ttt_enhancement = stats['ttt']['diff_top5']
@@ -167,7 +164,7 @@ def process(rank, world_size, cfg):
 
         if cfg.wandb and dist.get_rank() == 0:
             wandb.log(stats)
-            wandb.log({'image': table})
+            wandb.log({'image': image_table, 'ttt': ttt_table})
         dist.barrier()
         logger.info(stats)
 
@@ -179,6 +176,8 @@ def run_ttt(factory, status, config, dataset):
     diff_top5s = []
     nor_top1s = []
     nor_top5s = []
+
+    table = wandb.Table(columns=['corruption', 'severity', 'top1_before_ttt', 'top1_after_ttt', 'top5_before_ttt', 'top5_after_ttt'])
 
     for severity in dataset['severities']:
         for corruption in dataset['corruptions']:
@@ -197,13 +196,12 @@ def run_ttt(factory, status, config, dataset):
             diff_top5s.append(diff_top5)
             nor_top1s.append(nor_top1)
             nor_top5s.append(nor_top5)
-
+            table.add_data(corruption, severity, top1_before_ttt, top1_after_ttt, top5_before_ttt, top5_after_ttt)
     stats = {'ttt': {'diff_top1': np.mean(diff_top1s),
                      'diff_top5': np.mean(diff_top5s),
                      'nor_top1': np.mean(nor_top1s),
                      'nor_top5': np.mean(nor_top5s)}}
-
-    return stats 
+    return stats, table
 
 def get_random_port():
     return random.randint(1024, 65535)
@@ -232,4 +230,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    # sweep()
