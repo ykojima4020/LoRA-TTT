@@ -25,7 +25,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 from factory import RILSMAECLIPFactory, PretrainedOpenCLIPFactory, PretrainedOpenCLIPDecoderFineTuneFactory
-from factory import PretrainedHFOpenCLIPDecoderEncoderFineTuneFactory
+from factory import PretrainedHFOpenCLIPFactory
 from evaluator.evaluator import ZeroShotImageNetEvaluator
 
 from imagenetv2_pytorch import ImageNetV2Dataset
@@ -44,23 +44,51 @@ corruptions_name = ['brightness', 'contrast', 'defocus_blur', 'elastic_transform
 from misc.config import load_config
 from omegaconf import OmegaConf
 
-config = '../config/ttt_mae.yaml'
+config = '../config/default_local.yaml'
 cfg = load_config(config)
 OmegaConf.set_struct(cfg, True)
 
 device = 'cuda'
 
+
+# %%
+def robustness(model, tokenizer, transform, device, severity=5):
+
+    corruptions = []
+    top1s = []
+    top5s = []
+
+    dataset = torchvision.datasets.ImageFolder(root=f'/home/ykojima/dataset/imagenetv2-c/original/0', transform=transform('valid'))
+    evaluator = ZeroShotImageNetEvaluator(tokenizer, device, dataset)
+    eval_res = evaluator(model.clip, update=False)
+    corruptions.append('original')
+    top1s.append(eval_res['eval']['imagenet']['top1'])
+    top5s.append(eval_res['eval']['imagenet']['top5'])
+
+    for x in corruptions_name:
+        print(x)
+        if x == 'frost':
+            continue
+        dataset = torchvision.datasets.ImageFolder(root=f'/home/ykojima/dataset/imagenetv2-c/{x}/{severity}', transform=transform('valid'))
+        evaluator = ZeroShotImageNetEvaluator(tokenizer, device, dataset)
+        eval_res = evaluator(model.clip, update=False)
+        corruptions.append(x)
+        top1s.append(eval_res['eval']['imagenet']['top1'])
+        top5s.append(eval_res['eval']['imagenet']['top5'])
+        print(eval_res)
+
+    return pd.DataFrame({'corruption': corruptions, 'top1': top1s, 'top5': top5s})
+
+
 # %%
 # df.to_csv('./feature_reconst_zeroshot_robustness.csv')
-df = pd.read_csv('./feature_reconst_zeroshot_robustness.csv', index_col=0)
+df = pd.read_csv('./robustness/feature_reconst_zeroshot_robustness.csv', index_col=0)
 df
 
 # %%
 # open_clip_df.to_csv('./open_clip_zeroshot_robustness.csv')
-open_clip_df = pd.read_csv('./open_clip_zeroshot_robustness.csv', index_col=0)
+open_clip_df = pd.read_csv('./robustness/open_clip_zeroshot_robustness.csv', index_col=0)
 open_clip_df
-
-# %%
 
 # %%
 severity = 5
@@ -83,66 +111,22 @@ plt.title(f'severity={severity}')
 from peft import LoraConfig, get_peft_model
 
 # %%
-model_path = '/home/ykojima/Desktop/clip/mae_clip/output/20240401_decoder_layer8_encoder_lora_finetune_pix_recon_hf_open_clip_cc3m_wd_0001_blr_1e5/checkpoint.pth'
+# Hugging face open-clip robustness without fine-tuning
 
-factory = PretrainedHFOpenCLIPDecoderEncoderFineTuneFactory(cfg.model, mae='pixel')
+factory = PretrainedHFOpenCLIPFactory(cfg.model)
 model, tokenizer, transform = factory.create()
-
-# LoRA settings
-config = LoraConfig(r=2,
-                    target_modules=["k_proj", "v_proj", "q_proj", "out_proj"],
-                    lora_dropout=0.01,
-                    bias="none"
-                    )
-model = get_peft_model(model, config)
 model = model.to(device)
-
-status = torch.load(model_path, map_location="cuda")
-model.load_state_dict(status['model'])
 
 model.eval()
 
-# %%
-# parameters fixed
-for name, param in model.named_parameters():
-    param.requires_grad = False
-    print(name, param.requires_grad)
+hf_open_clip_zeroshot_robustness_results = robustness(model, tokenizer, transform, device, severity=5)
 
 # %%
-dataset = ImageNetV2Dataset(transform=transform('valid'))
-
-evaluator = ZeroShotImageNetEvaluator(tokenizer, device, dataset)
-eval_res = evaluator(model.clip, update=False)
+# hf_open_clip_zeroshot_robustness_results.to_csv('./robustness/hf_open_clip_zeroshot_robustness.csv')
+lora_robustness_results = pd.read_csv('./robustness/hf_open_clip_lora_zeroshot_robustness.csv', index_col=0)
 
 # %%
-severity = 5
-
-corruptions = []
-top1s = []
-top5s = []
-
-dataset = torchvision.datasets.ImageFolder(root=f'/home/ykojima/dataset/imagenetv2-c/original', transform=transform('valid'))
-evaluator = ZeroShotImageNetEvaluator(tokenizer, device, dataset)
-eval_res = evaluator(model.clip, update=False)
-corruptions.append('original')
-top1s.append(eval_res['eval']['imagenet']['top1'])
-top5s.append(eval_res['eval']['imagenet']['top5'])
-
-for x in corruptions_name:
-    print(x)
-    if x == 'frost':
-        continue
-    dataset = torchvision.datasets.ImageFolder(root=f'/home/ykojima/dataset/imagenetv2-c/{x}/{severity}', transform=transform('valid'))
-    evaluator = ZeroShotImageNetEvaluator(tokenizer, device, dataset)
-    eval_res = evaluator(model.clip, update=False)
-    corruptions.append(x)
-    top1s.append(eval_res['eval']['imagenet']['top1'])
-    top5s.append(eval_res['eval']['imagenet']['top5'])
-
-lora_robustness_results = pd.DataFrame({'corruption': corruptions, 'top1': top1s, 'top5': top5s})
-
-# %%
-lora_robustness_results.to_csv('./hf_open_clip_lora_zeroshot_robustness.csv')  
+lora_robustness_results
 
 # %%
 severity = 5
@@ -169,6 +153,58 @@ ax.bar([x+0.2 for x in index], lora_robustness_results['top5'], width=width, lab
 ax.set_ylabel('Top5 Accuracy')
 ax.set_xticks(index)
 ax.set_xticklabels(lora_robustness_results['corruption'].tolist(), rotation=90)
+plt.legend()
+plt.title(f'severity={severity}')
+
+# %%
+#### Feature Reconstruction
+
+# %%
+model_path = '/home/ykojima/Desktop/clip/mae_clip/output/20240402_decoder_layer8_encoder_lora_finetune_feature_recon_hf_open_clip_cc3m_wd_0001_blr_1e5/checkpoint.pth'
+
+factory = PretrainedHFOpenCLIPFactory(cfg.model, mae='feature')
+model, tokenizer, transform = factory.create()
+
+model = model.to(device)
+
+status = torch.load(model_path, map_location="cuda")
+model.load_state_dict(status['model'])
+
+model.eval()
+
+# %%
+# parameters fixed
+for name, param in model.named_parameters():
+    param.requires_grad = False
+    print(name, param.requires_grad)
+
+# %%
+df = robustness(model, tokenizer, transform, device, severity=5)
+
+# %%
+severity = 5
+index = list(range(15))
+width = 0.4
+fig, ax = plt.subplots(figsize=(10, 4))
+ax.bar([x-0.2 for x in index], open_clip_df['top5'], width=width, color='orange', label='Original Open CLIP (datacomp_l_s1b-b8k)')
+ax.bar([x+0.2 for x in index], lora_feature_reconst_robustness_results['top5'], width=width, label='Feature Reconstruction CC3M \n(LoRA: r=2, w=kvqo)')
+ax.set_ylabel('Top5 Accuracy')
+ax.set_xticks(index)
+ax.set_xticklabels(lora_feature_reconst_robustness_results['corruption'].tolist(), rotation=90)
+plt.legend()
+plt.title(f'severity={severity}')
+
+# %%
+severity = 5
+index = list(range(15))
+width = 0.3
+fig, ax = plt.subplots(figsize=(10, 4))
+ax.bar([x-0.3 for x in index], open_clip_df['top5'], width=width, color='orange', label='Original Open CLIP (datacomp_l_s1b-b8k)')
+ax.bar([x for x in index], lora_robustness_results['top5'], width=width, label='Pixel Reconstruction CC3M \n(LoRA: r=2, w=kvqo)')
+ax.bar([x+0.3 for x in index], lora_feature_reconst_robustness_results['top5'], width=width, label='Feature Reconstruction CC3M \n(LoRA: r=2, w=kvqo)')
+ax.set_ylabel('Top5 Accuracy')
+ax.set_xticks(index)
+ax.set_xticklabels(lora_feature_reconst_robustness_results['corruption'].tolist(), rotation=90)
 plt.legend()
 plt.title(f'severity={severity}')
 

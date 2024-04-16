@@ -3,7 +3,6 @@ data:
   pin_memory: true
   num_workers: 6
   shuffle_buffer: 10000
-  seed: ${train.seed}
   dataset:
     train_image_path: 'path'
     train_json: 'path'
@@ -29,12 +28,11 @@ train:
   epochs: 50
   warmup_epochs: 2
   lr: null
-  base_lr: 1e-3
-  weight_decay: 0.05
+  base_lr: 1e-5
+  weight_decay: 0.001
   warmup_lr: 4e-6
   min_lr: 4e-5
   clip_grad: 0.1
-  seed: 0
 
   lr_scheduler:
     name: cosine
@@ -50,7 +48,13 @@ model:
     encoder:
       name: 'vit'
       size: 224
-      patch_size: 14
+      patch_size: 16
+      embeddings: 768
+      layer: 12
+      head: 12
+    decoder:
+      layer: 8
+      head: 16
       embeddings: 512
   text:
     encoder:
@@ -69,7 +73,7 @@ model:
   peft:
     name: 'lora'
     r: 2
-    alpha: 4
+    alpha_r_scale: 2
     target_modules: ["k_proj", "v_proj", "q_proj", "out_proj"]
     dropout: 0.01
 
@@ -81,9 +85,8 @@ checkpoint:
 model_name: '' # display name in the logger
 test: false
 output: './tmp'
-seed: 0
 wandb: false
 device: 'cuda'
 world_size: 1
-type: 'normal'
+type: 'open'
 reconst: 'feature'
