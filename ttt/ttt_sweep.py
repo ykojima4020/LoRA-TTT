@@ -149,7 +149,7 @@ def run_ttt_enhancement(factory, status, config, data_root,
     before_ttt_top5 = before_ttt['eval']['imagenet']['top5']
 
     # [NOTE]: after culculation original zero-shot performance, load the finetuned weights.
-    model.load_state_dict(status['model'])
+    model.load_state_dict(status)
 
     # [NOTE]: STEP2: TTT
     for epoch in range(0, config.epochs):

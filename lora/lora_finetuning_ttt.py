@@ -38,12 +38,6 @@ def get_args_parser():
     parser.add_argument('--opts', help="Modify config options by adding 'KEY=VALUE' list. ", default=None, nargs='+')
     parser.add_argument('--test', action='store_true')
     parser.add_argument('--wandb', action='store_true')
-
-    parser.add_argument('--batch_size', type=int, help='Batch size per GPU (effective batch size is batch_size * accum_iter * # gpus')
-    parser.add_argument('--device', type=str)
-
-    parser.add_argument('--output', default='./tmp',
-                        help='path where to save, empty for no saving')
     return parser
 
 def process(rank, world_size, cfg):
@@ -58,12 +52,12 @@ def process(rank, world_size, cfg):
 
     if cfg.wandb and dist.get_rank() == 0:
         import wandb
-        run = wandb.init(project='mae_clip_lora_finetuning',
+        run = wandb.init(project=cfg.wandb_project,
                          entity="ykojima",
                          dir=cfg.output,
-                         config=OmegaConf.to_container(cfg, resolve=True),
-                         resume=cfg.checkpoint.auto_resume)
+                         config=OmegaConf.to_container(cfg, resolve=True))
         cfg = OmegaConf.create(dict(wandb.config))
+        cfg.output = run.dir
     else:
         wandb = None 
     # [NOTE]: waiting wandb init
@@ -93,7 +87,6 @@ def process(rank, world_size, cfg):
     gcc3m_dataloader_builder = GCC3MDataLoaderBuilder(cfg.data, tokenizer, transform)
 
     train_loader, train_sampler = gcc3m_dataloader_builder('train', rank, world_size, test=cfg.test)
-
     val_loader, _ = dataloader_builder(cfg.data.dataset.val_image_path,
                                       cfg.data.dataset.val_json, 'val', rank, world_size, test=cfg.test)
 
@@ -106,36 +99,16 @@ def process(rank, world_size, cfg):
         dataset = ImageNetV2Dataset(transform=transform('valid')) 
         evaluator = ZeroShotImageNetEvaluator(tokenizer, rank, dataset)
 
-    if cfg.checkpoint.auto_resume:
-        # [NOTE]: Retrieve the most recent .pth file from the designated directory upon auto_resume.
-        #         If the file is founded, cfg.checkpoint.resume is overwritten. 
-        resume_file = auto_resume_helper(cfg.output)
-        if resume_file:
-            if cfg.checkpoint.resume:
-                logger.warning(f'auto-resume changing resume file from {cfg.checkpoint.resume} to {resume_file}')
-            with read_write(cfg):
-                cfg.checkpoint.resume = resume_file
-            logger.info(f'auto resuming from {resume_file}')
-        else:
-            logger.info(f'no checkpoint found in {cfg.output}, ignoring auto resume')
-
     best_loss = float('inf')
     best_ttt_enhancement = float('-inf')
     best_acc_5 = 0
     best_acc_1 = 0
 
-    if cfg.checkpoint.resume:
-        max_metrics = load_checkpoint(cfg, model_without_ddp, optimizer, lr_scheduler)
-        best_loss = max_metrics['val_loss']
-        best_acc_1 = max_metrics['acc_1']
-        best_acc_5 = max_metrics['acc_5']
-
     logger.info('Start training')
     for epoch in range(cfg.train.start_epoch, cfg.train.epochs):
         dist.barrier()
-        # [TODO]: when using webdataset, sampler can not be used. How should I do?
-        # train_sampler.set_epoch(epoch)
         stats = {'epoch': epoch}
+        ttt_table = None
         logger.info(f"Epoch: {epoch + 1}")
         ddp_model.train()
         train_stats = trainer(ddp_model, epoch)
@@ -148,23 +121,47 @@ def process(rank, world_size, cfg):
 
         # [NOTE]: evaluation, ttt, and saving
         if dist.get_rank() == 0:
-            status = {'model': model_without_ddp.state_dict()}
+
+            eval_stats = evaluator(ddp_model.module.clip)
+            stats = stats | eval_stats
+
+            if stats['valid']['mae_loss'] < best_loss:
+                logger.info("Best Model!")
+                best_loss = stats['valid']['mae_loss']
+                checkpoint = os.path.join(cfg.output, 'checkpoint.pth')
+                metrics = {'val_loss': stats['valid']['mae_loss'],
+                           'acc_1': stats['eval']['imagenet']['top1'],
+                           'acc_5': stats['eval']['imagenet']['top5']}
+                save_state = {
+                    'model': model_without_ddp.state_dict(),
+                    'optimizer': optimizer.state_dict(),
+                    'lr_scheduler': lr_scheduler.state_dict(),
+                    'metrics': metrics,
+                    'epoch': epoch,
+                    'config': cfg
+                 }
+                torch.save(save_state, checkpoint)
 
             if ((epoch+1) % cfg.ttt.run_freq == 0):
+                # [NOTE]: load best model
+                # [TODO]: if there's no best model
+                if checkpoint:
+                    status = torch.load(checkpoint, map_location="cuda")
+                else:
+                    raise Exception('no checkpoint')
+
                 ds = cfg.data.dataset['ttt'][0]
                 ds_meta = cfg.data.dataset.meta[ds]
-                ttt_stats, ttt_table = run_ttt(factory, status, cfg.ttt, ds_meta)
+                ttt_stats, ttt_table = run_ttt(factory, status['model'], cfg.ttt, ds_meta)
                 stats = stats | ttt_stats
                 if stats['ttt']['diff_top5'] > best_ttt_enhancement:
                     best_ttt_enhancement = stats['ttt']['diff_top5']
                 stats['best_ttt_enhancement'] = best_ttt_enhancement
 
-            eval_stats = evaluator(ddp_model.module.clip)
-            stats = stats | eval_stats
-
         if cfg.wandb and dist.get_rank() == 0:
+            logger.info(stats)
             wandb.log(stats)
-            wandb.log({'image': image_table, 'ttt': ttt_table})
+            wandb.log({'image': image_table})
         dist.barrier()
         logger.info(stats)
 
@@ -179,7 +176,9 @@ def run_ttt(factory, status, config, dataset):
 
     table = wandb.Table(columns=['corruption', 'severity', 'top1_before_ttt', 'top1_after_ttt', 'top5_before_ttt', 'top5_after_ttt'])
 
+    sev_stats = {}
     for severity in dataset['severities']:
+        corr_stats = {}
         for corruption in dataset['corruptions']:
             # [NOTE]: there's no corruption dataset named frost
             if corruption == 'frost':
@@ -196,11 +195,19 @@ def run_ttt(factory, status, config, dataset):
             diff_top5s.append(diff_top5)
             nor_top1s.append(nor_top1)
             nor_top5s.append(nor_top5)
+
             table.add_data(corruption, severity, top1_before_ttt, top1_after_ttt, top5_before_ttt, top5_after_ttt)
-    stats = {'ttt': {'diff_top1': np.mean(diff_top1s),
-                     'diff_top5': np.mean(diff_top5s),
-                     'nor_top1': np.mean(nor_top1s),
-                     'nor_top5': np.mean(nor_top5s)}}
+            corr_stats.update({corruption: {'top1_before_ttt': top1_before_ttt,
+                                            'top1_after_ttt': top1_after_ttt,
+                                            'top5_before_ttt': top5_before_ttt,
+                                            'top5_after_ttt': top5_after_ttt}})
+        sev_stats.update({severity: corr_stats})
+
+    stats = {'ttt': {'diff_top1': float(np.mean(diff_top1s)),
+                     'diff_top5': float(np.mean(diff_top5s)),
+                     'nor_top1': float(np.mean(nor_top1s)),
+                     'nor_top5': float(np.mean(nor_top5s)),
+                     'all': sev_stats}}
     return stats, table
 
 def get_random_port():
@@ -220,8 +227,9 @@ def main():
     args = get_args_parser()
     args = args.parse_args()
     cfg = get_config(args)
+
     if cfg.output:
-        pathlib.Path(args.output).mkdir(parents=True, exist_ok=True)
+        pathlib.Path(cfg.output).mkdir(parents=True, exist_ok=True)
 
     mp.spawn(process,
         args=(cfg.world_size, cfg,),

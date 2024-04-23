@@ -190,7 +190,7 @@ if __name__ == "__main__":
     args = args.parse_args()
     cfg = get_config(args)
     if cfg.output:
-        pathlib.Path(args.output).mkdir(parents=True, exist_ok=True)
+        pathlib.Path(cfg.output).mkdir(parents=True, exist_ok=True)
 
     mp.spawn(main,
         args=(cfg.world_size, cfg,),

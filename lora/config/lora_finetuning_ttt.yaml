@@ -51,7 +51,7 @@ model:
 
 train:
   start_epoch: 0
-  epochs: 20
+  epochs: 3
   warmup_epochs: 2
   lr: 1e-4
   weight_decay: 0.05
@@ -68,11 +68,10 @@ ttt:
   batch_size: 128
   epochs: 10
   optimizer: 'sgd'
-  run_freq: 2
-
-checkpoint:
-  auto_resume: false
+  run_freq: 3
 
 world_size: 1
 
 reconst: 'feature'
+wandb_project: 'mae_clip_lora_finetuning'
+output: './output'
