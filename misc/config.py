@@ -39,8 +39,6 @@ def get_config(args):
 
     if hasattr(args, 'output') and args.output:
         cfg.output = args.output
-    else:
-        cfg.output = osp.join('./tmp', cfg.model_name)
 
     if hasattr(args, 'wandb') and args.wandb:
         cfg.wandb = args.wandb

@@ -1,5 +1,5 @@
 program: lora_finetuning_ttt.py
-method: 'random'
+method: 'grid'
 metric:
   name: 'best_ttt_enhancement'
   goal: 'maximize'
