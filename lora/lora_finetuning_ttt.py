@@ -21,11 +21,10 @@ from data.dataloader_builder import CLIPDataLoaderBuilder, GCC3MDataLoaderBuilde
 from trainer.trainer import SimpleTrainer
 from trainer.validater import SimpleValidater
 from evaluator.evaluator import ZeroShotImageNetEvaluator
-from ttt import run_ttt_enhancement 
+from tta import TestTimeAdapter
 
 from misc.config import get_config, load_config
 from misc.lr_scheduler import build_scheduler
-from misc.checkpoint import auto_resume_helper, load_checkpoint, save_checkpoint
 from misc.logger import get_logger
 from misc.optimizer import build_optimizer
 
@@ -57,7 +56,8 @@ def process(rank, world_size, cfg):
                          dir=cfg.output,
                          config=OmegaConf.to_container(cfg, resolve=True))
         cfg = OmegaConf.create(dict(wandb.config))
-        cfg.output = run.dir
+        cfg.output = pathlib.Path(run.dir) / "../check/"
+        cfg.output.mkdir(parents=True, exist_ok=True)
     else:
         wandb = None 
     # [NOTE]: waiting wandb init
@@ -176,6 +176,7 @@ def run_ttt(factory, status, config, dataset):
 
     table = wandb.Table(columns=['corruption', 'severity', 'top1_before_ttt', 'top1_after_ttt', 'top5_before_ttt', 'top5_after_ttt'])
 
+    tta_runner = TestTimeAdapter(single=config.single)
     sev_stats = {}
     for severity in dataset['severities']:
         corr_stats = {}
@@ -184,7 +185,7 @@ def run_ttt(factory, status, config, dataset):
             if corruption == 'frost':
                 continue
             data_root = pathlib.Path(dataset['path']) / corruption / str(severity)
-            top1_before_ttt, top5_before_ttt, top1_after_ttt, top5_after_ttt = run_ttt_enhancement(factory, status, config, data_root)
+            top1_before_ttt, top5_before_ttt, top1_after_ttt, top5_after_ttt = tta_runner(factory, status, config, data_root)
 
             diff_top1 = top1_after_ttt - top1_before_ttt
             diff_top5 = top5_after_ttt - top5_before_ttt
