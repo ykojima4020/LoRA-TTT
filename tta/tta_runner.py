@@ -12,13 +12,14 @@ from tta import TestTimeAdapter
 from factory import RILSMAECLIPFactory, PretrainedOpenCLIPDecoderEncoderFineTuneFactory, \
                     PretrainedHFOpenCLIPFactory
 from misc.config import load_config
+from misc.transforms import get_tta_transforms
 from omegaconf import OmegaConf
 
 columns = ['layer', 'lr', 'weight_decay', 'batch_size', 'epochs', 'optimizer', 'severity', 'corruption',
            'top1', 'top5', 'diff_top1', 'diff_top5', 'nor_top1', 'nor_top5']
 
 def get_args_parser():
-    parser = argparse.ArgumentParser('Evaluation on ImageNet-C', add_help=False)
+    parser = argparse.ArgumentParser('Run TTA', add_help=False)
     parser.add_argument('--cfg', type=str, required=True, help='path to a config file')
     parser.add_argument('--type', default='open', choices=['normal', 'open', 'hf_open'], help='a kind of archtectures')
     parser.add_argument('--wandb', action='store_true')
@@ -57,6 +58,7 @@ def main():
         raise TypeError
 
     tta_runner = TestTimeAdapter(single=config.ttt.single) 
+    tta_transform = get_tta_transforms
 
     status = torch.load(args.checkpoint, map_location="cuda")
 
@@ -74,7 +76,7 @@ def main():
                 continue
 
             data_root = pathlib.Path(ds_meta['path']) / corruption / str(severity)
-            top1_before_ttt, top5_before_ttt, top1_after_ttt, top5_after_ttt = tta_runner(factory, status['model'], config.ttt, data_root)
+            top1_before_ttt, top5_before_ttt, top1_after_ttt, top5_after_ttt = tta_runner(factory, status['model'], config.ttt, data_root, tta_transform)
 
             diff_top1 = top1_after_ttt - top1_before_ttt
             diff_top5 = top5_after_ttt - top5_before_ttt
