@@ -12,10 +12,10 @@ from tta import TestTimeAdapter
 from factory import RILSMAECLIPFactory, PretrainedOpenCLIPDecoderEncoderFineTuneFactory, \
                     PretrainedHFOpenCLIPFactory
 from misc.config import load_config
-from misc.transforms import get_tta_transforms
+from misc.transforms import get_open_clip_vitb16_transforms, get_tta_transforms
 from omegaconf import OmegaConf
 
-columns = ['layer', 'lr', 'weight_decay', 'batch_size', 'epochs', 'optimizer', 'severity', 'corruption',
+columns = ['lr', 'weight_decay', 'batch_size', 'epochs', 'optimizer', 'severity', 'corruption',
            'top1', 'top5', 'diff_top1', 'diff_top5', 'nor_top1', 'nor_top5']
 
 def get_args_parser():
@@ -58,7 +58,12 @@ def main():
         raise TypeError
 
     tta_runner = TestTimeAdapter(single=config.ttt.single) 
-    tta_transform = get_tta_transforms
+    if config.ttt.augmentation == 'simple':
+        tta_transform = get_open_clip_vitb16_transforms
+    elif config.ttt.augmentation == 'basic':
+        tta_transform = get_tta_transforms
+    else:
+        raise TypeError
 
     status = torch.load(args.checkpoint, map_location="cuda")
 
@@ -96,7 +101,7 @@ def main():
             nor_top1s.append(nor_top1)
             nor_top5s.append(nor_top5)
 
-            table.add_data(config.ttt.layer, config.ttt.lr, config.ttt.weight_decay, config.ttt.batch_size, config.ttt.epochs, config.ttt.optimizer, severity, corruption,
+            table.add_data(config.ttt.lr, config.ttt.weight_decay, config.ttt.batch_size, config.ttt.epochs, config.ttt.optimizer, severity, corruption,
                            top1_after_ttt, top5_after_ttt, diff_top1, diff_top5, nor_top1, nor_top5)
             print(table.get_dataframe())
             table.get_dataframe().to_csv(args.output, index=False)

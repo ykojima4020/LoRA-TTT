@@ -34,7 +34,19 @@ def get_tta_transforms(mode):
         transform_train = transforms.Compose([
             transforms.RandomResizedCrop(224, scale=(0.2, 1.0), interpolation=3),  # 3 is bicubic
             transforms.RandomHorizontalFlip(),
-            # transforms.ColorJitter(brightness=0.5, contrast=0.5, saturation=0.5, hue=0.5),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.48145466, 0.4578275, 0.40821073], std=[0.48145466, 0.4578275, 0.40821073])])
+        return transform_train
+    else:
+        _, train, val = open_clip.create_model_and_transforms('ViT-B-16', pretrained='datacomp_l_s1b-b8k')
+        return val
+
+def get_tta_transforms_color(mode):
+    if mode == 'train':
+        transform_train = transforms.Compose([
+            transforms.RandomResizedCrop(224, scale=(0.2, 1.0), interpolation=3),  # 3 is bicubic
+            transforms.RandomHorizontalFlip(),
+            transforms.ColorJitter(brightness=0.5, contrast=0.5, saturation=0.5, hue=0.5),
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.48145466, 0.4578275, 0.40821073], std=[0.48145466, 0.4578275, 0.40821073])])
         return transform_train

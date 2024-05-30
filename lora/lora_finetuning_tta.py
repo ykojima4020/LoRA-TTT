@@ -23,7 +23,7 @@ from trainer.validater import SimpleValidater
 from evaluator.evaluator import ZeroShotImageNetEvaluator
 from tta import TestTimeAdapter
 
-from misc.transforms import get_tta_transforms
+from misc.transforms import get_open_clip_vitb16_transforms, get_tta_transforms, get_tta_transforms_color
 from misc.config import get_config, load_config
 from misc.lr_scheduler import build_scheduler
 from misc.logger import get_logger
@@ -178,7 +178,15 @@ def run_ttt(factory, status, config, dataset):
     table = wandb.Table(columns=['corruption', 'severity', 'top1_before_ttt', 'top1_after_ttt', 'top5_before_ttt', 'top5_after_ttt'])
 
     tta_runner = TestTimeAdapter(single=config.single)
-    tta_transform = get_tta_transforms
+    if config.augmentation == 'simple':
+        tta_transform = get_open_clip_vitb16_transforms
+    elif config.augmentation == 'basic':
+        tta_transform = get_tta_transforms
+    elif config.augmentation == 'color':
+        tta_transform = get_tta_transforms_color
+    else:
+        raise TypeError
+
     sev_stats = {}
     for severity in dataset['severities']:
         corr_stats = {}
