@@ -38,10 +38,10 @@ class TestTimeAdapter():
         else:
             self._ttadapter = AllSampleAdapter() 
 
-    def __call__(self, factory, status, config, data_root,
+    def __call__(self, factory, status, config, data_root, tta_transform,
                  num_workers=4, pin_memory=True, device='cuda'):
         # [TODO]: evaluator and trainer should be provided as arguments.
-        model, tokenizer, transform = factory.create()
+        model, tokenizer, _ = factory.create()
         model = model.to(device)
     
         # [NOTE]: freze parameters not related to TTTPretrainedHFOpenCLIPFactory
@@ -62,17 +62,15 @@ class TestTimeAdapter():
             raise TypeError
     
         # [NOTE]: initialization
-        dataset = torchvision.datasets.ImageFolder(root=data_root, transform=transform('valid'))
+        dataset = torchvision.datasets.ImageFolder(root=data_root, transform=tta_transform('valid'))
         evaluator = ZeroShotImageNetEvaluator(tokenizer, device, dataset)
-        train_loader = torch.utils.data.DataLoader(dataset, batch_size=config.batch_size, num_workers=num_workers, pin_memory=pin_memory)
-        tttrainer = TestTimeTrainer(train_loader, optimizer, device)
     
         # [NOTE]: STEP1: Evaluation of initial model before TTT.
         before_tta = evaluator(model.clip)
         before_tta_top1 = before_tta['eval']['imagenet']['top1']
         before_tta_top5 = before_tta['eval']['imagenet']['top5']
     
-        after_tta_top1, after_tta_top5 = self._ttadapter(model, status, transform, tokenizer, optimizer, data_root, config, num_workers, pin_memory, device) 
+        after_tta_top1, after_tta_top5 = self._ttadapter(model, status, tta_transform, tokenizer, optimizer, data_root, config, num_workers, pin_memory, device) 
         return before_tta_top1, before_tta_top5, after_tta_top1, after_tta_top5
     
 class AllSampleAdapter():
@@ -82,9 +80,11 @@ class AllSampleAdapter():
 
     def __call__(self, model, status, transform, tokenizer, optimizer, data_root, config, num_workers, pin_memory, device):
         # [NOTE]: initialization
-        dataset = torchvision.datasets.ImageFolder(root=data_root, transform=transform('valid'))
-        evaluator = ZeroShotImageNetEvaluator(tokenizer, device, dataset)
-        train_loader = torch.utils.data.DataLoader(dataset, batch_size=config.batch_size, num_workers=num_workers, pin_memory=pin_memory)
+        test_dataset = torchvision.datasets.ImageFolder(root=data_root, transform=transform('valid'))
+        evaluator = ZeroShotImageNetEvaluator(tokenizer, device, test_dataset)
+
+        train_dataset = torchvision.datasets.ImageFolder(root=data_root, transform=transform('train'))
+        train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=config.batch_size, num_workers=num_workers, pin_memory=pin_memory)
         tttrainer = TestTimeTrainer(train_loader, optimizer, device)
 
         # [NOTE]: after culculation original zero-shot performance, load the finetuned weights.
@@ -109,6 +109,8 @@ class SingleSampleAdapter():
     def __call__(self, model, status, transform, tokenizer, optimizer, data_root, config, num_workers, pin_memory, device):
         steps_per_example = config.epochs
         train_dataset = torchvision.datasets.ImageFolder(root=data_root, transform=transform('train'))
+        print('tta train transform is follows.')
+        print(transform('train'))
         train_loader = iter(torch.utils.data.DataLoader(TTTTrainDataset(train_dataset, steps_per_example, config.batch_size), batch_size=config.batch_size, shuffle=False, num_workers=num_workers, pin_memory=pin_memory))
 
         test_dataset = torchvision.datasets.ImageFolder(root=data_root, transform=transform('valid')) 
