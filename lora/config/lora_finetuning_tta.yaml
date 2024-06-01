@@ -4,13 +4,28 @@ data:
   batch_size: 64
   dataset:
     meta:
-      imagenetv2-c:
+      imagenet_a:
         type: img_classification
         path: '/path/to/dataset'
-        corruptions: ['original']
-        severities: [0]
-    ttt:
-      - imagenetv2-c
+        classes: 'imagenet_a'
+        prompt: 'ensemble'
+      imagenetv2:
+        type: img_classification
+        path: '/path/to/dataset'
+        classes: 'imagenet'
+        prompt: 'ensemble'
+      imagenet_r:
+        type: img_classification
+        path: '/path/to/dataset'
+        classes: 'imagenet_r'
+        prompt: 'ensemble'
+      imagenet_sketch:
+        type: img_classification
+        path: '/path/to/dataset'
+        classes: 'imagenet'
+        prompt: 'ensemble'
+ 
+    tta: ['imagenetv2']
 
 model:
   image:
@@ -72,5 +87,5 @@ ttt:
 world_size: 1
 
 reconst: 'feature'
-wandb_project: 'mae_clip_lora_finetuning'
+wandb_project: 'test'
 output: './output'
