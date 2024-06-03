@@ -3,11 +3,9 @@ data:
     meta:
       imagenetv2-c:
         type: img_classification
-        path: 'path'
-        corruptions: ['brightness', 'contrast', 'defocus_blur', 'elastic_transform', 'fog',
-                      'frost', 'gaussian_noise', 'glass_blur', 'impulse_noise', 'jpeg_compression',
-                      'motion_blur', 'pixelate', 'shot_noise', 'snow', 'zoom_blur']
-        severities: [5]
+        path: '/path/to/dataset'
+        corruptions: ['original']
+        severities: [0]
     ttt:
       - imagenetv2-c
 
@@ -46,13 +44,14 @@ model:
     dropout: 0.01
 
 ttt:
-  layer: -1
   lr: 1e-3
   weight_decay: 0.2
-  batch_size: 128
+  batch_size: 64
   epochs: 1
-  optimizer: 'sgd'
+  optimizer: 'adam'
+  run_freq: 1
   single: True
+  augmentation: 'simple'
 
 reconst: 'feature'
 wandb_project: 'test'

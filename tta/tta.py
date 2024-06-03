@@ -3,10 +3,10 @@ import torchvision
 import sys
 sys.path.append('../')
 from evaluator.evaluator import ZeroShotImageNetEvaluator
-from evaluator import imagenet_config
 
 from tqdm import tqdm
 from misc.utils import AvgMeter
+from misc.transforms import get_open_clip_vitb16_transforms, get_tta_transforms, get_tta_transforms_color
 
 class TestTimeTrainer():
 
@@ -30,7 +30,7 @@ class TestTimeTrainer():
         return self._mae_loss_meter.avg
 
 
-class TestTimeAdapter():
+class TTARunner():
 
     def __init__(self, single):
         if single:
@@ -38,13 +38,13 @@ class TestTimeAdapter():
         else:
             self._ttadapter = AllSampleAdapter() 
 
-    def __call__(self, factory, status, config, data_root,
+    def __call__(self, factory, status,
+                 tta_train_data, tta_test_data, prompts, classes, config,
                  num_workers=4, pin_memory=True, device='cuda'):
-        # [TODO]: evaluator and trainer should be provided as arguments.
-        model, tokenizer, transform = factory.create()
+        model, tokenizer, _ = factory.create()
         model = model.to(device)
     
-        # [NOTE]: freze parameters not related to TTTPretrainedHFOpenCLIPFactory
+        # [NOTE]: Preparation for TTA
         for name, param in model.named_parameters():
             if ('decoder' in name):
                 param.requires_grad = False
@@ -60,19 +60,16 @@ class TestTimeAdapter():
             optimizer = torch.optim.SGD(model.image_encoder.parameters(), lr=config.lr, weight_decay=config.weight_decay) 
         else:
             raise TypeError
-    
-        # [NOTE]: initialization
-        dataset = torchvision.datasets.ImageFolder(root=data_root, transform=transform('valid'))
-        evaluator = ZeroShotImageNetEvaluator(tokenizer, device, dataset)
-        train_loader = torch.utils.data.DataLoader(dataset, batch_size=config.batch_size, num_workers=num_workers, pin_memory=pin_memory)
-        tttrainer = TestTimeTrainer(train_loader, optimizer, device)
-    
+
         # [NOTE]: STEP1: Evaluation of initial model before TTT.
+        evaluator = ZeroShotImageNetEvaluator(tokenizer, tta_test_data, prompts, classes, device)
         before_tta = evaluator(model.clip)
         before_tta_top1 = before_tta['eval']['imagenet']['top1']
         before_tta_top5 = before_tta['eval']['imagenet']['top5']
     
-        after_tta_top1, after_tta_top5 = self._ttadapter(model, status, transform, tokenizer, optimizer, data_root, config, num_workers, pin_memory, device) 
+        after_tta_top1, after_tta_top5 = self._ttadapter(model, status, tokenizer, optimizer,
+                                                         tta_train_data, tta_test_data, prompts, classes, config,
+                                                         num_workers, pin_memory, device) 
         return before_tta_top1, before_tta_top5, after_tta_top1, after_tta_top5
     
 class AllSampleAdapter():
@@ -80,11 +77,14 @@ class AllSampleAdapter():
     def __init__(self):
         pass
 
-    def __call__(self, model, status, transform, tokenizer, optimizer, data_root, config, num_workers, pin_memory, device):
+    def __call__(self, model, status, tokenizer, optimizer,
+                 tta_train_data, tta_test_data, prompts, classes, config,
+                 num_workers=4, pin_memory=True, device='cuda'):
         # [NOTE]: initialization
-        dataset = torchvision.datasets.ImageFolder(root=data_root, transform=transform('valid'))
-        evaluator = ZeroShotImageNetEvaluator(tokenizer, device, dataset)
-        train_loader = torch.utils.data.DataLoader(dataset, batch_size=config.batch_size, num_workers=num_workers, pin_memory=pin_memory)
+        evaluator = ZeroShotImageNetEvaluator(tokenizer, tta_test_data, prompts, classes, device)
+
+        train_loader = torch.utils.data.DataLoader(tta_train_data,
+                           batch_size=config.batch_size, num_workers=num_workers, pin_memory=pin_memory)
         tttrainer = TestTimeTrainer(train_loader, optimizer, device)
 
         # [NOTE]: after culculation original zero-shot performance, load the finetuned weights.
@@ -100,23 +100,26 @@ class AllSampleAdapter():
         after_tta_top5 = after_tta['eval']['imagenet']['top5']
         return after_tta_top1, after_tta_top5
 
-
 class SingleSampleAdapter():
 
     def __init__(self):
         pass
 
-    def __call__(self, model, status, transform, tokenizer, optimizer, data_root, config, num_workers, pin_memory, device):
+    def __call__(self, model, status, tokenizer, optimizer,
+                 tta_train_data, tta_test_data, prompts, classes, config,
+                 num_workers=4, pin_memory=True, device='cuda'):
+ 
         steps_per_example = config.epochs
-        train_dataset = torchvision.datasets.ImageFolder(root=data_root, transform=transform('train'))
-        train_loader = iter(torch.utils.data.DataLoader(TTTTrainDataset(train_dataset, steps_per_example, config.batch_size), batch_size=config.batch_size, shuffle=False, num_workers=num_workers, pin_memory=pin_memory))
+        train_loader = iter(torch.utils.data.DataLoader(TTTTrainDataset(tta_train_data, steps_per_example, config.batch_size),
+                                                        batch_size=config.batch_size, shuffle=False,
+                                                        num_workers=num_workers, pin_memory=pin_memory))
 
-        test_dataset = torchvision.datasets.ImageFolder(root=data_root, transform=transform('valid')) 
-        test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=1, shuffle=False, num_workers=num_workers, pin_memory=pin_memory)
+        test_loader = torch.utils.data.DataLoader(tta_test_data, batch_size=1, shuffle=False,
+                                                  num_workers=num_workers, pin_memory=pin_memory)
 
         model.load_state_dict(status)
         # [NOTE]: because the text encoder is not updated, text embeddings can be calculated at first.
-        text_embeddings = zeroshot_weights(model.clip, tokenizer, imagenet_config.imagenet_classes, imagenet_config.imagenet_templates, device)
+        text_embeddings = zeroshot_weights(model.clip, tokenizer, classes, prompts, device)
 
         top1, top5, n = 0., 0., 0.
 

@@ -21,8 +21,11 @@ from data.dataloader_builder import CLIPDataLoaderBuilder, GCC3MDataLoaderBuilde
 from trainer.trainer import SimpleTrainer
 from trainer.validater import SimpleValidater
 from evaluator.evaluator import ZeroShotImageNetEvaluator
-from tta import TestTimeAdapter
+from evaluator.imagenet_config import simple_prompts, ensemble_prompts, imagenet_classes
+from evaluator.imagenet_variant_config import imagenet_a_classes, imagenet_r_classes
+from tta import TTARunner
 
+from misc.transforms import get_open_clip_vitb16_transforms, get_tta_transforms, get_tta_transforms_color
 from misc.config import get_config, load_config
 from misc.lr_scheduler import build_scheduler
 from misc.logger import get_logger
@@ -96,8 +99,9 @@ def process(rank, world_size, cfg):
     trainer = SimpleTrainer(train_loader, optimizer, lr_scheduler, cfg.train.clip_grad, rank)
     validater = SimpleValidater(val_loader, optimizer, rank)
     if dist.get_rank() == 0:
+        # [NOTE]: Metrics is ImageNetV2 here.
         dataset = ImageNetV2Dataset(transform=transform('valid')) 
-        evaluator = ZeroShotImageNetEvaluator(tokenizer, rank, dataset)
+        evaluator = ZeroShotImageNetEvaluator(tokenizer, dataset, ensemble_prompts, imagenet_classes, rank)
 
     best_loss = float('inf')
     best_ttt_enhancement = float('-inf')
@@ -150,12 +154,13 @@ def process(rank, world_size, cfg):
                 else:
                     raise Exception('no checkpoint')
 
-                ds = cfg.data.dataset['ttt'][0]
-                ds_meta = cfg.data.dataset.meta[ds]
-                ttt_stats, ttt_table = run_ttt(factory, status['model'], cfg.ttt, ds_meta)
+                datasets = {}
+                for ds in cfg.data.dataset['tta']:
+                    datasets[ds] = cfg.data.dataset.meta[ds]
+                ttt_stats, ttt_table = run_ttt(factory, status['model'], datasets, cfg.ttt)
                 stats = stats | ttt_stats
-                if stats['ttt']['diff_top5'] > best_ttt_enhancement:
-                    best_ttt_enhancement = stats['ttt']['diff_top5']
+                if stats['ttt']['diff_top1'] > best_ttt_enhancement:
+                    best_ttt_enhancement = stats['ttt']['diff_top1']
                 stats['best_ttt_enhancement'] = best_ttt_enhancement
 
         if cfg.wandb and dist.get_rank() == 0:
@@ -167,48 +172,81 @@ def process(rank, world_size, cfg):
 
     cleanup()
 
-def run_ttt(factory, status, config, dataset):
+def run_ttt(factory, status, datasets, config):
 
     diff_top1s = []
     diff_top5s = []
     nor_top1s = []
     nor_top5s = []
 
-    table = wandb.Table(columns=['corruption', 'severity', 'top1_before_ttt', 'top1_after_ttt', 'top5_before_ttt', 'top5_after_ttt'])
+    table = wandb.Table(columns=['dataset', 'top1_before_ttt', 'top1_after_ttt', 'top5_before_ttt', 'top5_after_ttt'])
 
-    tta_runner = TestTimeAdapter(single=config.single)
-    sev_stats = {}
-    for severity in dataset['severities']:
-        corr_stats = {}
-        for corruption in dataset['corruptions']:
-            # [NOTE]: there's no corruption dataset named frost
-            if corruption == 'frost':
-                continue
-            data_root = pathlib.Path(dataset['path']) / corruption / str(severity)
-            top1_before_ttt, top5_before_ttt, top1_after_ttt, top5_after_ttt = tta_runner(factory, status, config, data_root)
+    # [NOTE]: Data augmentation for TTA
+    if config.augmentation == 'simple':
+        tta_transform = get_open_clip_vitb16_transforms
+    elif config.augmentation == 'basic':
+        tta_transform = get_tta_transforms
+    elif config.augmentation == 'color':
+        tta_transform = get_tta_transforms_color
+    else:
+        raise TypeError
 
-            diff_top1 = top1_after_ttt - top1_before_ttt
-            diff_top5 = top5_after_ttt - top5_before_ttt
+    datasets_stats = {}
+    for name, dataset in datasets.items():
+        data_root = pathlib.Path(dataset['path'])
+        tta_train_data = torchvision.datasets.ImageFolder(root=data_root, transform=tta_transform('train'))
+        tta_test_data = torchvision.datasets.ImageFolder(root=data_root, transform=tta_transform('valid'))
+
+        if dataset['prompt'] == 'simple':
+            prompts = simple_prompts
+        elif dataset['prompt'] == 'ensemble':
+            prompts = ensemble_prompts
+        else:
+            raise TypeError
+
+        if dataset['classes'] == 'imagenet':
+            classes = imagenet_classes
+        elif dataset['classes'] == 'imagenet_a':
+            classes = imagenet_a_classes
+        elif dataset['classes'] == 'imagenet_r':
+            classes = imagenet_r_classes
+        else:
+            raise TypeError
+
+        tta_runner = TTARunner(single=config.single)
+        top1_before_ttt, top5_before_ttt, top1_after_ttt, top5_after_ttt = tta_runner(factory, status,
+                                                                                      tta_train_data, tta_test_data,
+                                                                                      prompts, classes, config)
+        diff_top1 = top1_after_ttt - top1_before_ttt
+        diff_top5 = top5_after_ttt - top5_before_ttt
+
+        try:
             nor_top1 = top1_after_ttt / top1_before_ttt
+        except ZeroDivisionError:
+            print('Error: Cannot divide by zero.')
+            nor_top1 = np.nan
+        try:
             nor_top5 = top5_after_ttt / top5_before_ttt
+        except ZeroDivisionError:
+            print('Error: Cannot divide by zero.')
+            nor_top5 = np.nan
 
-            diff_top1s.append(diff_top1)
-            diff_top5s.append(diff_top5)
-            nor_top1s.append(nor_top1)
-            nor_top5s.append(nor_top5)
+        diff_top1s.append(diff_top1)
+        diff_top5s.append(diff_top5)
+        nor_top1s.append(nor_top1)
+        nor_top5s.append(nor_top5)
 
-            table.add_data(corruption, severity, top1_before_ttt, top1_after_ttt, top5_before_ttt, top5_after_ttt)
-            corr_stats.update({corruption: {'top1_before_ttt': top1_before_ttt,
-                                            'top1_after_ttt': top1_after_ttt,
-                                            'top5_before_ttt': top5_before_ttt,
-                                            'top5_after_ttt': top5_after_ttt}})
-        sev_stats.update({severity: corr_stats})
+        table.add_data(name, top1_before_ttt, top1_after_ttt, top5_before_ttt, top5_after_ttt)
+        datasets_stats.update({name: {'top1_before_ttt': top1_before_ttt,
+                                      'top1_after_ttt': top1_after_ttt,
+                                      'top5_before_ttt': top5_before_ttt,
+                                      'top5_after_ttt': top5_after_ttt}})
 
     stats = {'ttt': {'diff_top1': float(np.mean(diff_top1s)),
                      'diff_top5': float(np.mean(diff_top5s)),
                      'nor_top1': float(np.mean(nor_top1s)),
                      'nor_top5': float(np.mean(nor_top5s)),
-                     'all': sev_stats}}
+                     'all': datasets_stats}}
     return stats, table
 
 def get_random_port():

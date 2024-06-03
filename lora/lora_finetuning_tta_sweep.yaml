@@ -1,4 +1,4 @@
-program: lora_finetuning_ttt.py
+program: lora_finetuning_tta.py
 method: 'grid'
 metric:
   name: 'best_ttt_enhancement'
@@ -19,5 +19,5 @@ command:
   - "python"
   - ${program}
   - "--cfg"
-  - "config/lora_finetuning_ttt.yaml"
+  - "config/lora_finetuning_tta.yaml"
   - "--wandb"

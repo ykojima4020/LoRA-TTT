@@ -4,16 +4,28 @@ data:
   batch_size: 64
   dataset:
     meta:
-      imagenetv2-c:
+      imagenet_a:
         type: img_classification
-        path: 'path'
-        corruptions: ['brightness', 'contrast', 'defocus_blur', 'elastic_transform', 'fog',
-                      'frost', 'gaussian_noise', 'glass_blur', 'impulse_noise', 'jpeg_compression',
-                      'motion_blur', 'pixelate', 'shot_noise', 'snow', 'zoom_blur']
-
-        severities: [5]
-    ttt:
-      - imagenetv2-c
+        path: '/path/to/dataset'
+        classes: 'imagenet_a'
+        prompt: 'ensemble'
+      imagenetv2:
+        type: img_classification
+        path: '/path/to/dataset'
+        classes: 'imagenet'
+        prompt: 'ensemble'
+      imagenet_r:
+        type: img_classification
+        path: '/path/to/dataset'
+        classes: 'imagenet_r'
+        prompt: 'ensemble'
+      imagenet_sketch:
+        type: img_classification
+        path: '/path/to/dataset'
+        classes: 'imagenet'
+        prompt: 'ensemble'
+ 
+    tta: ['imagenetv2']
 
 model:
   image:
@@ -44,14 +56,14 @@ model:
     alpha: 1
   peft:
     name: 'lora'
-    r: 4
+    r: 1
     alpha_r_scale: 2
     target_modules: ["k_proj", "v_proj", "q_proj", "out_proj"]
     dropout: 0.01
 
 train:
   start_epoch: 0
-  epochs: 3
+  epochs: 1
   warmup_epochs: 2
   lr: 1e-4
   weight_decay: 0.05
@@ -65,13 +77,15 @@ train:
 ttt:
   lr: 1e-3
   weight_decay: 0.2
-  batch_size: 128
-  epochs: 10
-  optimizer: 'sgd'
-  run_freq: 3
+  batch_size: 64
+  epochs: 1
+  optimizer: 'adam'
+  run_freq: 1
+  single: True
+  augmentation: 'simple'
 
 world_size: 1
 
 reconst: 'feature'
-wandb_project: 'mae_clip_lora_finetuning'
+wandb_project: 'test'
 output: './output'

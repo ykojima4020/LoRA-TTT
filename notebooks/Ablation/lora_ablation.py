@@ -8,9 +8,9 @@
 #       format_version: '1.5'
 #       jupytext_version: 1.16.1
 #   kernelspec:
-#     display_name: venv
+#     display_name: mae_clip
 #     language: python
-#     name: venv
+#     name: mae_clip
 # ---
 
 import wandb
@@ -22,12 +22,14 @@ import seaborn as sns
 # +
 # select sweep_id
 sweep_id = '<entitiy>/<project>/<sweep id>'
+sweep_id = 'ykojima/mae_clip_lora_finetuning/up3tbiw4'
+# sweep_id = 'ykojima/mae_clip_lora_finetuning/863r1fiq'
+# sweep_id = 'ykojima/mae_clip_lora_finetuning/4829xrou'
 
 api = wandb.Api()
 sweep = api.sweep(sweep_id)
 # -
 
-print(sweep.config)
 print(sweep.state)
 print(sweep.expected_run_count)
 
@@ -36,7 +38,13 @@ print(sweep.expected_run_count)
 # -
 
 runs = sweep.runs
+runs = list(runs)
 print(len(runs))
+
+# [NOTE]: add additional runs to the sweep
+run_id = 'ykojima/mae_clip_lora_finetuning/i390gl8e'
+r = api.run(run_id)
+runs.append(r)
 
 
 def flatten_dict(d, parent_key='', sep='_'):
@@ -95,23 +103,26 @@ def flatten_dict(d, parent_key='', sep='_'):
 # runs_df.to_csv("project.csv")
 # ```
 
-# +
-df_list = []
-for run in runs: 
-    summary_dict = flatten_dict(run.summary._json_dict, sep='.')
-    config_dict = flatten_dict(run.config, sep='.')
-    # [NOTE]: to remove complitity
-    config_dict['model.peft.target_modules'] = '+'.join(config_dict['model.peft.target_modules'])
-    name_dict = {'name': run.name}
-    all_dict = {**summary_dict, **config_dict, **name_dict}
-    df = pd.DataFrame.from_dict(all_dict, orient='index').T
-    df_list.append(df)
+def runs_params_formatter(runs):
+    df_list = []
+    for run in runs: 
+        summary_dict = flatten_dict(run.summary._json_dict, sep='.')
+        config_dict = flatten_dict(run.config, sep='.')
+        # [NOTE]: to remove complitity
+        config_dict['model.peft.target_modules'] = '+'.join(config_dict['model.peft.target_modules'])
+        name_dict = {'name': run.name}
+        all_dict = {**summary_dict, **config_dict, **name_dict}
+        df = pd.DataFrame.from_dict(all_dict, orient='index').T
+        df_list.append(df)
 
-sweep_summary = pd.concat(df_list)
-sweep_summary['best_ttt_enhancement'] = sweep_summary['best_ttt_enhancement'].astype(float)
+    sweep_summary = pd.concat(df_list)
+    sweep_summary['best_ttt_enhancement'] = sweep_summary['best_ttt_enhancement'].astype(float)
+    return sweep_summary
 
 
-# -
+sweep_summary = runs_params_formatter(runs)
+sweep_summary
+
 
 # 平均化するセルの値が NaN の場合は、その値は平均値に考慮されない
 def average_duplicate_rows(df, columns_to_group, column_to_average):
@@ -176,8 +187,9 @@ fig, ax = plt.subplots()
 for k,v in order_mapping.items():
     tmp = target[target['model.peft.target_modules'] == v]
     ax.plot(tmp['model.peft.r'], tmp['best_ttt_enhancement'], 'o-', label=f'LoRA modules = {k}')
-ax.set_ylabel('TTT enhancement')
+ax.set_ylabel('Top1 enhancement')
 ax.set_xlabel('LoRA rank')
+ax.set_ylim(-3,1)
 ax.set_title(reconst)
 plt.legend()
 
@@ -189,11 +201,13 @@ for r in [1, 8, 64]: # LoRA rank
     tmp = target[target['model.peft.r'] == r]
     ax.bar(tmp['model.peft.target_modules'] + alignment, tmp['best_ttt_enhancement'], width=0.3, label=f'rank = {r}')
     alignment += 0.3
-ax.set_ylabel('TTT enhancement')
+ax.set_ylabel('Top1 enhancement')
 ax.set_xlabel('LoRA target_modules')
 plt.xticks([x for x in list(order_mapping.values())], labels=order_mapping.keys())
 ax.set_title(reconst)
 plt.legend()
 # -
+
+
 
 
