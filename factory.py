@@ -249,6 +249,7 @@ class PretrainedHFOpenCLIPFactory(Factory):
                                 target_modules=self._peft.target_modules,
                                 lora_alpha=(self._peft.r * self._peft.alpha_r_scale),
                                 lora_dropout=self._peft.dropout,
+                                layers_to_transform=self._peft.layers_to_transform
                                )
             model = get_peft_model(model, config)
         else:

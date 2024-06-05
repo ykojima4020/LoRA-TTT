@@ -1,13 +1,12 @@
 data:
   dataset:
     meta:
-      imagenetv2-c:
+      imagenetv2:
         type: img_classification
         path: '/path/to/dataset'
-        corruptions: ['original']
-        severities: [0]
-    ttt:
-      - imagenetv2-c
+        classes: 'imagenet'
+        prompt: 'ensemble'
+    tta: ['imagenetv2']
 
 model:
   image:
@@ -38,15 +37,16 @@ model:
     alpha: 1
   peft:
     name: 'lora'
-    r: 2
+    r: 4
     alpha_r_scale: 2
     target_modules: ["k_proj", "v_proj", "q_proj", "out_proj"]
     dropout: 0.01
+    layers_to_transform: [0,1,2,3,4,5,6,7,8,9,10,11]
 
 ttt:
   lr: 1e-3
   weight_decay: 0.2
-  batch_size: 64
+  batch_size: 128
   epochs: 1
   optimizer: 'adam'
   run_freq: 1
