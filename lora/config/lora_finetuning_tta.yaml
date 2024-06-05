@@ -56,10 +56,11 @@ model:
     alpha: 1
   peft:
     name: 'lora'
-    r: 1
+    r: 4
     alpha_r_scale: 2
     target_modules: ["k_proj", "v_proj", "q_proj", "out_proj"]
     dropout: 0.01
+    layers_to_transform: [0,1,2,3,4,5,6,7,8,9,10,11]
 
 train:
   start_epoch: 0
@@ -77,7 +78,7 @@ train:
 ttt:
   lr: 1e-3
   weight_decay: 0.2
-  batch_size: 64
+  batch_size: 128
   epochs: 1
   optimizer: 'adam'
   run_freq: 1

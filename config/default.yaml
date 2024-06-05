@@ -17,7 +17,7 @@ data:
         length: 2248678
 
     train:
-      - gcc3m
+      - gcc3m_005
 
   img_aug:
   text_aug:
@@ -76,6 +76,7 @@ model:
     alpha_r_scale: 2
     target_modules: ["k_proj", "v_proj", "q_proj", "out_proj"]
     dropout: 0.01
+    layers_to_transform: [0,1,2,3,4,5,6,7,8,9,10,11]
 
 checkpoint:
   auto_resume: true
