@@ -1,8 +1,6 @@
 import torch
 from tqdm import tqdm
 
-from evaluator import imagenet_config
-
 class Evaluator():
 
     def __init__(self):
