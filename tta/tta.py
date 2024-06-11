@@ -35,25 +35,23 @@ class TPTMAETTARunner():
 
         # [NOTE]: fixed parameters for TPT
         arch = 'ViT-B/16'
-        lr = 0.005
 
         trainable_param = model.clip.prompt_learner.parameters()
-        optimizer = torch.optim.AdamW(trainable_param, lr)
+        optimizer = torch.optim.AdamW(trainable_param, config.tpt.lr)
         optim_state = deepcopy(optimizer.state_dict())
 
 
         text_embeddings = zeroshot_weights(model.clip, tokenizer, classes, prompts, device)
 
         # [NOTE]: MAE optimizer, update only image encoder
-        if config.optimizer == 'adam':
+        if config.mae.optimizer == 'adam':
             eps = 1e-8
             mae_optimizer = torch.optim.AdamW(model.image_encoder.parameters(),
-                    eps=eps, lr=config.lr, betas=(0.9, 0.95), weight_decay=config.weight_decay)
-        elif config.optimizer == 'sgd':
-            mae_optimizer = torch.optim.SGD(model.image_encoder.parameters(), lr=config.lr, weight_decay=config.weight_decay)
+                    eps=eps, lr=config.mae.lr, betas=(0.9, 0.95), weight_decay=config.mae.weight_decay)
+        elif config.mae.optimizer == 'sgd':
+            mae_optimizer = torch.optim.SGD(model.image_encoder.parameters(), lr=config.mae.lr, weight_decay=config.mae.weight_decay)
         else:
             raise TypeError
-
 
         tta_data_loader = torch.utils.data.DataLoader(
                     tta_dataset,
@@ -87,20 +85,20 @@ class TPTMAETTARunner():
             images = torch.cat(images, dim=0)
 
             # reset the tunable prompt to its initial state
-            if config.epochs > 0:
+            if self._tpt and (config.tpt.epochs > 0):
                 with torch.no_grad():
                     model.clip.reset()
 
             # [NOTE]: I don't know why optimizer is loaded here.
             optimizer.load_state_dict(optim_state)
             if self._tpt:
-                test_time_tuning(model.clip, images, optimizer, scaler, config)
+                test_time_tuning(model.clip, images, optimizer, scaler, config.tpt)
 
             # [NOTE]: MAE TTA
             if self._mae:
                 # [TODO]: should load only LoRA and Decoder, not update text_encoder
                 model.mae.load_state_dict(status)
-                for j in range(config.epochs):
+                for j in range(config.mae.epochs):
                     loss, reconstruction, mask = model.mae(images)
                     mae_optimizer.zero_grad()
                     loss.backward()

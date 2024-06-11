@@ -77,14 +77,18 @@ train:
     name: cosine
 
 tta:
-  lr: 1e-3
-  weight_decay: 0.2
-  batch_size: 128
-  epochs: 1
-  optimizer: 'adam'
+  mae:
+    lr: 1e-3
+    weight_decay: 0.2
+    batch_size: 128
+    epochs: 1
+    optimizer: 'adam'
+  tpt:
+    lr: 5e-3
+    batch_size: 64
+    epochs: 1
+  enable: ['mae', 'tpt']
   run_freq: 1
-  mae: True
-  tpt: False
 
 world_size: 1
 

@@ -14,12 +14,11 @@ import torch.nn.functional as F
 
 from typing import Any, Union, List
 
-import sys
+import os
 from model.tpt_tokenizer import SimpleTokenizer as _Tokenizer
 
-# from data.cls_to_names import *
-
-_tokenizer = _Tokenizer(bpe_path='./model/bpe_simple_vocab_16e6.txt.gz')
+script_dir = os.path.dirname(os.path.abspath(__file__))
+_tokenizer = _Tokenizer(bpe_path=f'{script_dir}/bpe_simple_vocab_16e6.txt.gz')
 
 DOWNLOAD_ROOT='~/.cache/clip'
 

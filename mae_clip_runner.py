@@ -40,6 +40,8 @@ from misc.optimizer import build_optimizer
 
 import random
 
+logger = get_logger()
+
 def get_args_parser():
     parser = argparse.ArgumentParser('Tuning hyper parameters used in LoRA for TTT', add_help=False)
     parser.add_argument('--cfg', type=str, required=True, help='path to a config file')
@@ -61,7 +63,6 @@ def main():
     if cfg.output:
         pathlib.Path(cfg.output).mkdir(parents=True, exist_ok=True)
 
-    logger = get_logger()
     logger.info(f"Running train on device {device}.")
 
     if not cfg.train.lr:
@@ -86,12 +87,15 @@ def main():
     model, tokenizer, transform = factory.create()
     model = model.to(device)
 
-    for name, param in model.named_parameters():
-        param.requires_grad = False
-
     tta_datasets = {}
     for ds in cfg.data.dataset['tta']:
         tta_datasets[ds] = cfg.data.dataset.meta[ds]
+
+    # [NOTE]: extract valid TTA method
+    tta_config = {}
+    for m in cfg.tta['enable']:
+        tta_config[m] = cfg.tta[m]
+    cfg.tta = OmegaConf.create(tta_config)
  
     if cfg.tta_only:
         if args.checkpoint:
@@ -207,9 +211,10 @@ def run_tta(factory, status, datasets, config):
     preprocess = transforms.Compose([
                 transforms.ToTensor(),
                 normalize])
-    tta_transform = AugMixAugmenter(base_transform, preprocess, n_views=config.batch_size-1, 
+    batch_size = min([p.batch_size for n, p in config.items()])
+    logger.info(f"TTA Batch size: {batch_size}")
+    tta_transform = AugMixAugmenter(base_transform, preprocess, n_views=batch_size-1,
                                     augmix=False)
-
 
     datasets_stats = {}
     for name, dataset in datasets.items():
@@ -233,7 +238,8 @@ def run_tta(factory, status, datasets, config):
             raise TypeError
 
         # [TODO]: Choose TTA algorithm here.
-        tta_runner = TPTMAETTARunner(mae=config.mae, tpt=config.tpt)
+        tta_runner = TPTMAETTARunner(mae=('mae' in config.keys()),
+                                     tpt=('tpt' in config.keys()))
 
         # [TODO]: first of all, calculate initial peformance before fine-tuning.
         model, tokenizer, transform = factory.create()
