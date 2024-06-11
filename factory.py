@@ -277,8 +277,9 @@ class PretrainedHFOpenCLIPFactory(Factory):
         transform = get_open_clip_vitb16_transforms
         return model, tokenizer, transform
 
-
+# [TODO]: this factory shoud be integrated into PretrainedHFOpenCLIPFactory
 class PretrainedTPTHFOpenCLIPFactory(Factory):
+
     def __init__(self, cfg, mae='pixel'):
         # [NOTE]: need to create a decoder
         self._image_size = cfg.image.encoder.size
@@ -309,9 +310,20 @@ class PretrainedTPTHFOpenCLIPFactory(Factory):
         text_encoder = TPTTextEncoder(hf_open_clip_model.text_model, hf_open_clip_model.dtype)
         # [NOTE]: ImageProjector is also used for TextProjector
         text_projector = HFOpenCLIPImageProjector(hf_open_clip_model.text_projection)
+
+        if self._peft.name == 'lora':
+            config = LoraConfig(r=self._peft.r,
+                                target_modules=self._peft.target_modules,
+                                lora_alpha=(self._peft.r * self._peft.alpha_r_scale),
+                                lora_dropout=self._peft.dropout,
+                                layers_to_transform=self._peft.layers_to_transform
+                               )
+            image_encoder = get_peft_model(image_encoder, config)
+        else:
+            raise TypeError(f'{self._peft.name} is not supported.')
+
         clip = TPTHFOpenCLIP(image_encoder, image_projector, text_encoder, text_projector, hf_open_clip_model, self._temperature)
 
-        '''
         if self._mae == 'pixel':
             image_decoder = MAEPixelDecoder(
                 image_size=self._image_size, patch_size=self._patch_size,
@@ -330,35 +342,13 @@ class PretrainedTPTHFOpenCLIPFactory(Factory):
         # [NOTE]: creating model...
         model = MAECLIP(image_encoder, clip, mae, alpha=self._alpha)
 
-        if self._peft.name == 'lora':
-            config = LoraConfig(r=self._peft.r,
-                                target_modules=self._peft.target_modules,
-                                lora_alpha=(self._peft.r * self._peft.alpha_r_scale),
-                                lora_dropout=self._peft.dropout,
-                                layers_to_transform=self._peft.layers_to_transform
-                               )
-            model.image_encoder = get_peft_model(model.image_encoder, config)
-        else:
-            raise TypeError(f'{self._peft.name} is not supported.')
-
-        # [NOTE]: trainable parameter settings
+        # [NOTE]: all the trainable parameters are requires_grad = False.
         for name, param in model.named_parameters():
-            if ('decoder' in name):
-                param.requires_grad = True
-
-        if self._mae == 'feature':
-            for name, param in model.named_parameters():
-                if ('ema' in name):
-                    param.requires_grad = False
-
-        # [TODO]: I don't know logit_scale should be trainable or not.
-        # elif ('logit_scale' in name):
-        #     param.requires_grad = True
-        '''
+            param.requires_grad = False
 
         tokenizer = processor.tokenizer
         tokenizer = BertTokenizer(tokenizer)
 
         # [TODO]: should be set transform designed for
         transform = get_open_clip_vitb16_transforms
-        return clip, tokenizer, transform
+        return model, tokenizer, transform

@@ -91,3 +91,4 @@ device: 'cuda'
 world_size: 1
 type: 'open'
 reconst: 'feature'
+tta_only: False
