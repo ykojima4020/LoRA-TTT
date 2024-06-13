@@ -58,4 +58,7 @@ def get_config(args):
     if hasattr(args, 'reconst') and args.reconst:
         cfg.reconst = args.reconst
 
+    if hasattr(args, 'tta_only') and args.tta_only:
+        cfg.tta_only = args.tta_only
+
     return cfg
