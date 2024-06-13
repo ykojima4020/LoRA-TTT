@@ -49,7 +49,7 @@ def get_args_parser():
     parser.add_argument('--opts', help="Modify config options by adding 'KEY=VALUE' list. ", default=None, nargs='+')
     parser.add_argument('--test', action='store_true')
     parser.add_argument('--tta_only', action='store_true')
-    parser.add_argument('--checkpoint', type=str, required=True, help='path to a pth file')
+    parser.add_argument('--checkpoint', type=str, help='path to a pth file')
     parser.add_argument('--wandb', action='store_true')
     return parser
 
@@ -167,7 +167,7 @@ def main():
                        'acc_1': stats['eval']['imagenet']['top1'],
                        'acc_5': stats['eval']['imagenet']['top5']}
             save_state = {
-                'model': model.state_dict(),
+                'model': model.mae.state_dict(),
                 'optimizer': optimizer.state_dict(),
                 'lr_scheduler': lr_scheduler.state_dict(),
                 'metrics': metrics,

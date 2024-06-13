@@ -33,35 +33,36 @@ class TPTMAETTARunner():
         for name, param in model.named_parameters():
             print(f'{name}: {param.requires_grad}')
 
-        # [NOTE]: fixed parameters for TPT
-        arch = 'ViT-B/16'
 
-        trainable_param = model.clip.prompt_learner.parameters()
-        optimizer = torch.optim.AdamW(trainable_param, config.tpt.lr)
-        optim_state = deepcopy(optimizer.state_dict())
+        if self._tpt:
+            # [NOTE]: fixed parameters for TPT
+            arch = 'ViT-B/16'
+            trainable_param = model.clip.prompt_learner.parameters()
+            optimizer = torch.optim.AdamW(trainable_param, config.tpt.lr)
+            optim_state = deepcopy(optimizer.state_dict())
+            model.clip.reset_classnames(classes, arch)
 
+            # setup automatic mixed-precision (Amp) loss scaling
+            scaler = torch.cuda.amp.GradScaler(init_scale=1000)
 
-        text_embeddings = zeroshot_weights(model.clip, tokenizer, classes, prompts, device)
+        if self._mae:
+            text_embeddings = zeroshot_weights(model.clip, tokenizer, classes, prompts, device)
+            # [NOTE]: MAE optimizer, update only image encoder
+            if config.mae.optimizer == 'adam':
+                eps = 1e-8
+                mae_optimizer = torch.optim.AdamW(model.image_encoder.parameters(),
+                        eps=eps, lr=config.mae.lr, betas=(0.9, 0.95), weight_decay=config.mae.weight_decay)
+            elif config.mae.optimizer == 'sgd':
+                mae_optimizer = torch.optim.SGD(model.image_encoder.parameters(), lr=config.mae.lr, weight_decay=config.mae.weight_decay)
+            else:
+                raise TypeError
 
-        # [NOTE]: MAE optimizer, update only image encoder
-        if config.mae.optimizer == 'adam':
-            eps = 1e-8
-            mae_optimizer = torch.optim.AdamW(model.image_encoder.parameters(),
-                    eps=eps, lr=config.mae.lr, betas=(0.9, 0.95), weight_decay=config.mae.weight_decay)
-        elif config.mae.optimizer == 'sgd':
-            mae_optimizer = torch.optim.SGD(model.image_encoder.parameters(), lr=config.mae.lr, weight_decay=config.mae.weight_decay)
-        else:
-            raise TypeError
 
         tta_data_loader = torch.utils.data.DataLoader(
                     tta_dataset,
                     batch_size=1, shuffle=False,
                     num_workers=num_workers, pin_memory=pin_memory)
 
-        # setup automatic mixed-precision (Amp) loss scaling
-        scaler = torch.cuda.amp.GradScaler(init_scale=1000)
-
-        model.clip.reset_classnames(classes, arch)
 
         top1 = AverageMeter('Acc@1', ':6.2f', Summary.AVERAGE)
         top5 = AverageMeter('Acc@5', ':6.2f', Summary.AVERAGE)
@@ -84,14 +85,14 @@ class TPTMAETTARunner():
             image = images[0]
             images = torch.cat(images, dim=0)
 
-            # reset the tunable prompt to its initial state
-            if self._tpt and (config.tpt.epochs > 0):
-                with torch.no_grad():
-                    model.clip.reset()
-
-            # [NOTE]: I don't know why optimizer is loaded here.
-            optimizer.load_state_dict(optim_state)
             if self._tpt:
+                # reset the tunable prompt to its initial state
+                if config.tpt.epochs > 0:
+                    with torch.no_grad():
+                        model.clip.reset()
+
+                # [NOTE]: I don't know why optimizer is loaded here.
+                optimizer.load_state_dict(optim_state)
                 test_time_tuning(model.clip, images, optimizer, scaler, config.tpt)
 
             # [NOTE]: MAE TTA
@@ -105,11 +106,11 @@ class TPTMAETTARunner():
                     mae_optimizer.step()
 
 
+            # [NOTE]: inference
             model.eval()
             model.clip = model.clip.to(device) # why?
             with torch.no_grad():
                 with torch.cuda.amp.autocast():
-            # [NOTE]: inference
                     if self._tpt:
                         output = model.clip(image)
                     else:
@@ -149,6 +150,8 @@ def test_time_tuning(clip, inputs, optimizer, scaler, config):
         optimizer.zero_grad()
         # compute gradient and do SGD step
         scaler.scale(loss).backward()
+        del loss
+
         # Unscales the gradients of optimizer's assigned params in-place
         scaler.step(optimizer)
         scaler.update()
