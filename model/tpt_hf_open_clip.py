@@ -129,7 +129,7 @@ class TPTTextEncoder(nn.Module):
         self.dtype = dtype
 
     def forward(self, prompts, tokenized_prompts):
-        x = prompts + self.positional_embedding.type(self.dtype) # x.shape torch.Size([1000, 77, 512])
+        x = prompts + self.positional_embedding.type(self.dtype)[:35, :] # x.shape torch.Size([1000, 77, 512])
         # [NOTE]: confirmed that x is the same as original TPT at this point.
 
         # [NOTE]: this process is refered as
