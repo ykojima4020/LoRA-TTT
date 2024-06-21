@@ -29,7 +29,7 @@ from trainer.validater import SimpleValidater
 from evaluator.evaluator import ZeroShotImageNetEvaluator
 from evaluator.imagenet_config import simple_prompts, ensemble_prompts, imagenet_classes
 from evaluator.imagenet_variant_config import imagenet_a_classes, imagenet_r_classes
-from tta import TPTMAETTARunner
+from tta import TPTMAETTARunner, TPTTTARunner, MEMLoRATTARunner, MEMLoRATPTTTARunner
 
 from misc.transforms import get_open_clip_vitb16_transforms, get_tta_transforms, get_tta_transforms_color
 from misc.tpt_transforms import AugMixAugmenter
@@ -238,8 +238,14 @@ def run_tta(factory, status, datasets, config):
             raise TypeError
 
         # [TODO]: Choose TTA algorithm here.
-        tta_runner = TPTMAETTARunner(mae=('mae' in config.keys()),
-                                     tpt=('tpt' in config.keys()))
+        if ('mae' in config.keys()) and ('tpt' in config.keys()):
+            tta_runner = MEMLoRATPTTTARunner()
+        elif not ('mae' in config.keys()) and ('tpt' in config.keys()):
+            tta_runner = TPTTTARunner()
+        elif ('mae' in config.keys()) and not ('tpt' in config.keys()):
+            tta_runner = MEMLoRATTARunner()
+        else:
+            raise TypeError
 
         # [TODO]: first of all, calculate initial peformance before fine-tuning.
         model, tokenizer, transform = factory.create()

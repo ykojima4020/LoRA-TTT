@@ -256,19 +256,9 @@ class PretrainedHFOpenCLIPFactory(Factory):
         else:
             raise TypeError(f'{self._peft.name} is not supported.')
 
-        # [NOTE]: trainable parameter settings
+        # [NOTE]: all the trainable parameters are requires_grad = False.
         for name, param in model.named_parameters():
-            if ('decoder' in name):
-                param.requires_grad = True
-
-        if self._mae == 'feature':
-            for name, param in model.named_parameters():
-                if ('ema' in name):
-                    param.requires_grad = False
-
-        # [TODO]: I don't know logit_scale should be trainable or not.
-        # elif ('logit_scale' in name):
-        #     param.requires_grad = True
+            param.requires_grad = False
 
         tokenizer = processor.tokenizer
         tokenizer = BertTokenizer(tokenizer)
