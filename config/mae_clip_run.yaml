@@ -29,9 +29,70 @@ data:
         path: '/path/to/dataset'
         classes: 'imagenet'
         prompt: 'ensemble'
+
+      flower102:
+        type: img_classification
+        path: '/path/to/dataset'
+        label: '/path/to/label'
+        classes: 'flower102'
+        prompt: 'ensemble'
+      food101:
+        type: img_classification
+        path: '/path/to/dataset'
+        label: '/path/to/label'
+        classes: 'food101'
+        prompt: 'ensemble'
+      dtd:
+        type: img_classification
+        path: '/path/to/dataset'
+        label: '/path/to/label'
+        classes: 'dtd'
+        prompt: 'ensemble'
+      pets:
+        type: img_classification
+        path: '/path/to/dataset'
+        label: '/path/to/label'
+        classes: 'pets'
+        prompt: 'ensemble'
+      sun397:
+        type: img_classification
+        path: '/path/to/dataset'
+        label: '/path/to/label'
+        classes: 'sun397'
+        prompt: 'ensemble'
+      caltech101:
+        type: img_classification
+        path: '/path/to/dataset'
+        label: '/path/to/label'
+        classes: 'caltech101'
+        prompt: 'ensemble'
+      ucf101:
+        type: img_classification
+        path: '/path/to/dataset'
+        label: '/path/to/label'
+        classes: 'ucf101'
+        prompt: 'ensemble'
+      cars:
+        type: img_classification
+        path: '/path/to/dataset'
+        label: '/path/to/label'
+        classes: 'cars'
+        prompt: 'ensemble'
+      eurosat:
+        type: img_classification
+        path: '/path/to/dataset'
+        label: '/path/to/label'
+        classes: 'eurosat'
+        prompt: 'ensemble'
+      aircraft:
+        type: img_classification
+        path: '/path/to/dataset'
+        label: ''
+        classes: 'aircraft'
+        prompt: 'ensemble'
  
-    tta: ['imagenet_a', 'imagenetv2', 'imagenet_r', 'imagenet_sketch']
-    train: ['gcc3m_01']
+    tta: ['imagenet', 'imagenet_a', 'imagenetv2', 'imagenet_r', 'imagenet_sketch']
+    train: ['gcc3m_005']
 
 model:
   image:
@@ -85,14 +146,14 @@ tta:
   mae:
     lr: 1e-3
     weight_decay: 0.2
-    batch_size: 128
+    batch_size: 64
     epochs: 1
     optimizer: 'adam'
   tpt:
     lr: 5e-3
     batch_size: 64
     epochs: 1
-  enable: ['mae', 'tpt']
+  enable: ['mae']
   run_freq: 1
 
 world_size: 1
