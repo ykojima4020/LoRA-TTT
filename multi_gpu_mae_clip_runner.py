@@ -20,7 +20,7 @@ from factory import PretrainedHFOpenCLIPFactory
 from data.dataloader_builder import CLIPDataLoaderBuilder, GCC3MDataLoaderBuilder
 from trainer.trainer import SimpleTrainer
 from trainer.validater import SimpleValidater
-from evaluator.evaluator import ZeroShotImageNetEvaluator
+from evaluator.evaluator import ZeroShotEvaluator
 from evaluator.imagenet_config import simple_prompts, ensemble_prompts, imagenet_classes
 from evaluator.imagenet_variant_config import imagenet_a_classes, imagenet_r_classes
 from tta import TTARunner
@@ -106,7 +106,7 @@ def process(rank, world_size, cfg):
     if dist.get_rank() == 0:
         # [NOTE]: Metrics is ImageNetV2 here.
         dataset = ImageNetV2Dataset(transform=transform('valid')) 
-        evaluator = ZeroShotImageNetEvaluator(tokenizer, dataset, ensemble_prompts, imagenet_classes, rank)
+        evaluator = ZeroShotEvaluator(tokenizer, dataset, ensemble_prompts, imagenet_classes, rank)
 
     best_loss = float('inf')
     best_tta_enhancement = float('-inf')

@@ -26,7 +26,7 @@ from factory import PretrainedHFOpenCLIPFactory, PretrainedTPTHFOpenCLIPFactory
 from data.dataloader_builder import CLIPDataLoaderBuilder, GCC3MDataLoaderBuilder
 from trainer.trainer import SimpleTrainer
 from trainer.validater import SimpleValidater
-from evaluator.evaluator import ZeroShotImageNetEvaluator
+from evaluator.evaluator import ZeroShotEvaluator
 from evaluator.imagenet_config import simple_prompts, ensemble_prompts, imagenet_classes
 from evaluator.imagenet_variant_config import imagenet_a_classes, imagenet_r_classes
 from tta import TPTMAETTARunner, TPTTTARunner, MEMLoRATTARunner, MEMLoRATPTTTARunner
@@ -39,6 +39,9 @@ from misc.logger import get_logger
 from misc.optimizer import build_optimizer
 
 import random
+
+from external.TPT.data.fewshot_datasets import BaseJsonDataset, Aircraft
+from external.TPT.data.cls_to_names import *
 
 logger = get_logger()
 
@@ -125,7 +128,7 @@ def main():
     validater = SimpleValidater(val_loader, optimizer, device)
     # [NOTE]: Metrics is ImageNetV2 here.
     dataset = ImageNetV2Dataset(transform=transform('valid')) 
-    evaluator = ZeroShotImageNetEvaluator(tokenizer, dataset, ensemble_prompts, imagenet_classes, device)
+    evaluator = ZeroShotEvaluator(tokenizer, dataset, ensemble_prompts, imagenet_classes, device)
 
     best_loss = float('inf')
 
@@ -218,23 +221,27 @@ def run_tta(factory, status, datasets, config):
     datasets_stats = {}
     for name, dataset in datasets.items():
         data_root = pathlib.Path(dataset['path'])
-        tta_data = torchvision.datasets.ImageFolder(root=data_root, transform=tta_transform)
 
         if dataset['prompt'] == 'simple':
             prompts = simple_prompts
         elif dataset['prompt'] == 'ensemble':
             prompts = ensemble_prompts
         else:
-            raise TypeError
+            prompts = eval(f"{dataset['prompt']}_prompts")
 
-        if dataset['classes'] == 'imagenet':
-            classes = imagenet_classes
-        elif dataset['classes'] == 'imagenet_a':
-            classes = imagenet_a_classes
-        elif dataset['classes'] == 'imagenet_r':
-            classes = imagenet_r_classes
+        if 'imagenet' in dataset['classes']:
+            if dataset['classes'] == 'imagenet':
+                classes = imagenet_classes
+            elif dataset['classes'] == 'imagenet_a':
+                classes = imagenet_a_classes
+            elif dataset['classes'] == 'imagenet_r':
+                classes = imagenet_r_classes
+            else:
+                raise TypeError
         else:
-            raise TypeError
+            classes = eval("{}_classes".format(dataset['classes']))
+            # [NOTE]: remove under bars in classes according to TPT or C-TPT.
+            classes = [cls.replace('_', ' ') for cls in classes]
 
         # [TODO]: Choose TTA algorithm here.
         if ('mae' in config.keys()) and ('tpt' in config.keys()):
@@ -249,12 +256,26 @@ def run_tta(factory, status, datasets, config):
         # [TODO]: first of all, calculate initial peformance before fine-tuning.
         model, tokenizer, transform = factory.create()
         model = model.to(device)
-        tta_test_dataset = torchvision.datasets.ImageFolder(root=data_root, transform=transform('val'))
-        evaluator = ZeroShotImageNetEvaluator(tokenizer, tta_test_dataset, prompts, classes, device)
+
+        if 'imagenet' in dataset['classes']:
+            tta_test_dataset = torchvision.datasets.ImageFolder(root=data_root, transform=transform('val'))
+        elif dataset['classes'] == 'aircraft':
+            tta_test_dataset = Aircraft(data_root, 'test', None, transform('val'))
+        else:
+            tta_test_dataset = BaseJsonDataset(data_root, dataset['label'], 'test', None, transform('val'))
+
+        evaluator = ZeroShotEvaluator(tokenizer, tta_test_dataset, prompts, classes, device)
         before_tta = evaluator(model.clip)
         top1_before_tta = before_tta['eval']['imagenet']['top1']
         top5_before_tta = before_tta['eval']['imagenet']['top5']
         del model
+
+        if 'imagenet' in dataset['classes']:
+            tta_data = torchvision.datasets.ImageFolder(root=data_root, transform=tta_transform)
+        elif dataset['classes'] == 'aircraft':
+            tta_data = Aircraft(data_root, 'test', None, tta_transform)
+        else:
+            tta_data = BaseJsonDataset(data_root, dataset['label'], 'test', None, tta_transform)
 
         top1_after_tta, top5_after_tta = tta_runner(factory, status, tta_data,
                                                     prompts, classes, config)
