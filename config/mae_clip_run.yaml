@@ -30,7 +30,7 @@ data:
         classes: 'imagenet'
         prompt: 'ensemble'
  
-    tta: ['imagenet_a', 'imagenetv2', 'imagenet_r', 'imagenet_sketch']
+    tta: ['imagenet', 'imagenet_a', 'imagenetv2', 'imagenet_r', 'imagenet_sketch']
     train: ['gcc3m_01']
 
 model:
@@ -85,14 +85,14 @@ tta:
   mae:
     lr: 1e-3
     weight_decay: 0.2
-    batch_size: 128
+    batch_size: 64
     epochs: 1
     optimizer: 'adam'
   tpt:
     lr: 5e-3
     batch_size: 64
     epochs: 1
-  enable: ['mae', 'tpt']
+  enable: ['mae']
   run_freq: 1
 
 world_size: 1

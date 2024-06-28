@@ -99,10 +99,9 @@ def main():
  
     if cfg.tta_only:
         if args.checkpoint:
-            print(args.checkpoint)
             status = torch.load(args.checkpoint, map_location=device)
         else:
-            raise Exception('no checkpoint')
+            status = {'model': model.mae.state_dict()}
         stats = run_tta(factory, status['model'], tta_datasets, cfg.tta)
         if cfg.wandb:
             wandb.log(stats)
