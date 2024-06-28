@@ -4,7 +4,7 @@ import numpy as np
 
 import sys
 sys.path.append('../')
-from evaluator.evaluator import ZeroShotImageNetEvaluator
+from evaluator.evaluator import ZeroShotEvaluator
 
 from copy import deepcopy
 from tqdm import tqdm
@@ -505,7 +505,7 @@ class TTARunner():
             raise TypeError
 
         # [NOTE]: STEP1: Evaluation of initial model before TTT.
-        evaluator = ZeroShotImageNetEvaluator(tokenizer, tta_test_data, prompts, classes, device)
+        evaluator = ZeroShotEvaluator(tokenizer, tta_test_data, prompts, classes, device)
         before_tta = evaluator(model.clip)
         before_tta_top1 = before_tta['eval']['imagenet']['top1']
         before_tta_top5 = before_tta['eval']['imagenet']['top5']
@@ -524,7 +524,7 @@ class AllSampleAdapter():
                  tta_train_data, tta_test_data, prompts, classes, config,
                  num_workers=4, pin_memory=True, device='cuda'):
         # [NOTE]: initialization
-        evaluator = ZeroShotImageNetEvaluator(tokenizer, tta_test_data, prompts, classes, device)
+        evaluator = ZeroShotEvaluator(tokenizer, tta_test_data, prompts, classes, device)
 
         train_loader = torch.utils.data.DataLoader(tta_train_data,
                            batch_size=config.batch_size, num_workers=num_workers, pin_memory=pin_memory)
