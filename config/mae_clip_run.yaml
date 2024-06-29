@@ -123,7 +123,7 @@ model:
     alpha: 1
   peft:
     name: 'lora'
-    r: 4
+    r: 32
     alpha_r_scale: 2
     target_modules: ["k_proj", "v_proj", "q_proj", "out_proj"]
     dropout: 0.01
@@ -143,17 +143,27 @@ train:
     name: cosine
 
 tta:
-  mae:
+  peft:
     lr: 1e-3
     weight_decay: 0.2
     batch_size: 64
     epochs: 1
     optimizer: 'adam'
+    loss: ['mem']
+    mae:
+      weight: 1
+    mem:
+      weight: 1
+
   tpt:
     lr: 5e-3
     batch_size: 64
     epochs: 1
-  enable: ['mae']
+    loss: ['mem']
+    mem:
+      weight: 1
+
+  params: ['peft']
   run_freq: 1
 
 world_size: 1

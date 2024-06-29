@@ -29,7 +29,7 @@ from trainer.validater import SimpleValidater
 from evaluator.evaluator import ZeroShotEvaluator
 from evaluator.imagenet_config import simple_prompts, ensemble_prompts, imagenet_classes
 from evaluator.imagenet_variant_config import imagenet_a_classes, imagenet_r_classes
-from tta import TPTMAETTARunner, TPTTTARunner, MEMLoRATTARunner, MEMLoRATPTTTARunner
+from tta import TPTTTARunner, MEMLoRATTARunner, MAELoRATTARunner, MAEMEMLoRATTARunner
 
 from misc.transforms import get_open_clip_vitb16_transforms, get_tta_transforms, get_tta_transforms_color
 from misc.tpt_transforms import AugMixAugmenter
@@ -86,7 +86,8 @@ def main():
     logger.info(cfg)
 
     # [NOTE]: factory used in this script is only for Hugging Face.
-    factory = PretrainedTPTHFOpenCLIPFactory(cfg.model, mae=cfg.reconst)
+    # factory = PretrainedTPTHFOpenCLIPFactory(cfg.model, mae=cfg.reconst)
+    factory = PretrainedHFOpenCLIPFactory(cfg.model, mae=cfg.reconst)
     model, tokenizer, transform = factory.create()
     model = model.to(device)
 
@@ -96,7 +97,7 @@ def main():
 
     # [NOTE]: extract valid TTA method
     tta_config = {}
-    for m in cfg.tta['enable']:
+    for m in cfg.tta['params']:
         tta_config[m] = cfg.tta[m]
     cfg.tta = OmegaConf.create(tta_config)
  
@@ -244,14 +245,25 @@ def run_tta(factory, status, datasets, config):
             classes = [cls.replace('_', ' ') for cls in classes]
 
         # [TODO]: Choose TTA algorithm here.
-        if ('mae' in config.keys()) and ('tpt' in config.keys()):
-            tta_runner = MEMLoRATPTTTARunner()
-        elif not ('mae' in config.keys()) and ('tpt' in config.keys()):
-            tta_runner = TPTTTARunner()
-        elif ('mae' in config.keys()) and not ('tpt' in config.keys()):
-            tta_runner = MEMLoRATTARunner()
+        if ('peft' in config.keys()) and ('tpt' in config.keys()):
+            raise NotImplementedError
+        elif not ('peft' in config.keys()) and ('tpt' in config.keys()):
+            # [NOTE]: MEM for updating Text Prompts
+            tta_runner = TPTTTARunner(config['tpt'])
+        elif ('peft' in config.keys()) and not ('tpt' in config.keys()):
+            loss = config['peft']['loss']
+            if ('mem' in loss) and not ('mae' in loss):
+                # [NOTE]: MEM for updating LoRA
+                tta_runner = MEMLoRATTARunner(config['peft'])
+            elif not ('mem' in loss) and ('mae' in loss):
+                # [NOTE]: MAE for updating LoRA
+                tta_runner = MAELoRATTARunner(config['peft'])
+            elif ('mem' in loss) and ('mae' in loss):
+                # [NOTE]: MAE + MEM for updating LoRA
+                tta_runner = MAEMEMLoRATTARunner(config['peft'])
         else:
             raise TypeError
+
 
         # [TODO]: first of all, calculate initial peformance before fine-tuning.
         model, tokenizer, transform = factory.create()
@@ -278,7 +290,7 @@ def run_tta(factory, status, datasets, config):
             tta_data = BaseJsonDataset(data_root, dataset['label'], 'test', None, tta_transform)
 
         top1_after_tta, top5_after_tta = tta_runner(factory, status, tta_data,
-                                                    prompts, classes, config)
+                                                    prompts, classes)
 
         diff_top1 = top1_after_tta - top1_before_tta
         diff_top5 = top5_after_tta - top5_before_tta

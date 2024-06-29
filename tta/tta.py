@@ -130,11 +130,15 @@ class TPTMAETTARunner():
 
 class TPTTTARunner():
 
-    def __init__(self):
+    def __init__(self, config):
         print(f'{self} created.')
+        print(config)
+        self._config = config
+        if not config['loss'] == ['mem']:
+            raise ValueError
 
     def __call__(self, factory, status,
-                 tta_dataset, prompts, classes, config,
+                 tta_dataset, prompts, classes,
                  num_workers=4, pin_memory=True, device='cuda'):
         model, tokenizer, _ = factory.create()
         model = model.to(device)
@@ -148,7 +152,7 @@ class TPTTTARunner():
         # [NOTE]: fixed parameters for TPT
         arch = 'ViT-B/16'
         trainable_param = model.clip.prompt_learner.parameters()
-        optimizer = torch.optim.AdamW(trainable_param, config.tpt.lr)
+        optimizer = torch.optim.AdamW(trainable_param, self._config.lr)
         optim_state = deepcopy(optimizer.state_dict())
         model.clip.reset_classnames(classes, arch)
 
@@ -159,7 +163,6 @@ class TPTTTARunner():
                     tta_dataset,
                     batch_size=1, shuffle=False,
                     num_workers=num_workers, pin_memory=pin_memory)
-
 
         top1 = AverageMeter('Acc@1', ':6.2f', Summary.AVERAGE)
         top5 = AverageMeter('Acc@5', ':6.2f', Summary.AVERAGE)
@@ -182,13 +185,13 @@ class TPTTTARunner():
             images = torch.cat(images, dim=0)
 
             # reset the tunable prompt to its initial state
-            if config.tpt.epochs > 0:
+            if self._config.epochs > 0:
                 with torch.no_grad():
                     model.clip.reset()
 
             # [NOTE]: I don't know why optimizer is loaded here.
             optimizer.load_state_dict(optim_state)
-            test_time_tuning(model.clip, images, optimizer, scaler, config.tpt)
+            test_time_tuning(model.clip, images, optimizer, scaler, self._config)
 
             # [NOTE]: inference
             model.eval()
@@ -209,11 +212,15 @@ class TPTTTARunner():
 
 class MEMLoRATTARunner():
 
-    def __init__(self):
+    def __init__(self, config):
         print(f'{self} created.')
+        print(config)
+        self._config = config
+        if not config['loss'] == ['mem']:
+            raise ValueError
 
     def __call__(self, factory, status,
-                 tta_dataset, prompts, classes, config,
+                 tta_dataset, prompts, classes,
                  num_workers=4, pin_memory=True, device='cuda'):
         model, tokenizer, _ = factory.create()
         model = model.to(device)
@@ -228,12 +235,12 @@ class MEMLoRATTARunner():
 
         text_embeddings = zeroshot_weights(model.clip, tokenizer, classes, prompts, device)
         # [NOTE]: MAE optimizer, update only image encoder
-        if config.mae.optimizer == 'adam':
+        if self._config.optimizer == 'adam':
             eps = 1e-8
-            mae_optimizer = torch.optim.AdamW(model.image_encoder.parameters(),
-                    eps=eps, lr=config.mae.lr, betas=(0.9, 0.95), weight_decay=config.mae.weight_decay)
-        elif config.mae.optimizer == 'sgd':
-            mae_optimizer = torch.optim.SGD(model.image_encoder.parameters(), lr=config.mae.lr, weight_decay=config.mae.weight_decay)
+            optimizer = torch.optim.AdamW(model.image_encoder.parameters(),
+                    eps=eps, lr=self._config.lr, betas=(0.9, 0.95), weight_decay=self._config.weight_decay)
+        elif self._config.optimizer == 'sgd':
+            optimizer = torch.optim.SGD(model.image_encoder.parameters(), lr=self._config.lr, weight_decay=self._config.weight_decay)
         else:
             raise TypeError
 
@@ -262,15 +269,15 @@ class MEMLoRATTARunner():
 
             # [TODO]: should load only LoRA and Decoder, not update text_encoder
             model.mae.load_state_dict(status)
-            for j in range(config.mae.epochs):
+            for j in range(self._config.epochs):
                 image_features = model.clip.image_encode(images)
                 image_features = image_features / image_features.norm(dim=-1, keepdim=True)
                 output = model.clip.logit_scale.exp() * (image_features @ text_embeddings)
                 output, _ = select_confident_samples(output, selection_p)
                 loss = avg_entropy(output)
-                mae_optimizer.zero_grad()
+                optimizer.zero_grad()
                 loss.backward()
-                mae_optimizer.step()
+                optimizer.step()
  
             # [NOTE]: inference
             model.eval()
@@ -290,6 +297,187 @@ class MEMLoRATTARunner():
                 progress.display(i)
 
         return top1.avg.item(), top5.avg.item()
+
+class MAELoRATTARunner():
+
+    def __init__(self, config):
+        print(f'{self} created.')
+        print(config)
+        self._config = config
+        if not config['loss'] == ['mae']:
+            raise ValueError
+
+    def __call__(self, factory, status,
+                 tta_dataset, prompts, classes,
+                 num_workers=4, pin_memory=True, device='cuda'):
+        model, tokenizer, _ = factory.create()
+        model = model.to(device)
+
+        # [NOTE]: trainable parameters
+        for name, param in model.image_encoder.named_parameters():
+            if 'lora' in name:
+                param.requires_grad = True
+
+        for name, param in model.named_parameters():
+            print(f'{name}: {param.requires_grad}')
+
+        text_embeddings = zeroshot_weights(model.clip, tokenizer, classes, prompts, device)
+        # [NOTE]: MAE optimizer, update only image encoder
+        if self._config.optimizer == 'adam':
+            eps = 1e-8
+            optimizer = torch.optim.AdamW(model.image_encoder.parameters(),
+                    eps=eps, lr=self._config.lr, betas=(0.9, 0.95), weight_decay=self._config.weight_decay)
+        elif self._config.optimizer == 'sgd':
+            optimizer = torch.optim.SGD(model.image_encoder.parameters(), lr=self._config.lr, weight_decay=self._config.weight_decay)
+        else:
+            raise TypeError
+
+        tta_data_loader = torch.utils.data.DataLoader(
+                    tta_dataset,
+                    batch_size=1, shuffle=False,
+                    num_workers=num_workers, pin_memory=pin_memory)
+
+        top1 = AverageMeter('Acc@1', ':6.2f', Summary.AVERAGE)
+        top5 = AverageMeter('Acc@5', ':6.2f', Summary.AVERAGE)
+
+        progress = ProgressMeter(
+            len(tta_data_loader),
+            [top1, top5],
+            prefix='Test: ')
+
+        selection_p = 0.1
+
+        for i, (images, target) in tqdm(enumerate(tta_data_loader)):
+
+            for k in range(len(images)):
+                images[k] = images[k].to(device)
+            target = target.to(device)
+            image = images[0]
+            images = torch.cat(images, dim=0)
+
+            # [TODO]: should load only LoRA and Decoder, not update text_encoder
+            model.mae.load_state_dict(status)
+            for j in range(self._config.epochs):
+                loss, reconstruction, mask = model.mae(images)
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+ 
+            # [NOTE]: inference
+            model.eval()
+            model.clip = model.clip.to(device) # why?
+            with torch.no_grad():
+                with torch.cuda.amp.autocast():
+                    image_features = model.clip.image_encode(image)
+                    image_features /= image_features.norm(dim=-1, keepdim=True)
+                    output = image_features @ text_embeddings
+
+            # measure accuracy and record loss
+            acc1, acc5 = accuracy(output, target, topk=(1, 5))
+            top1.update(acc1[0], image.size(0))
+            top5.update(acc5[0], image.size(0))
+
+            if (i+1) % 200 == 0:
+                progress.display(i)
+
+        return top1.avg.item(), top5.avg.item()
+
+
+
+class MAEMEMLoRATTARunner():
+
+    def __init__(self, config):
+        print(f'{self} created.')
+        print(config)
+        self._config = config
+        if not config['loss'] == ['mae', 'mem']:
+            raise ValueError
+        self._mem_weight = config['mem']['weight']
+        self._mae_weight = config['mae']['weight']
+        print(self._mem_weight, self._mae_weight)
+
+    def __call__(self, factory, status,
+                 tta_dataset, prompts, classes,
+                 num_workers=4, pin_memory=True, device='cuda'):
+        model, tokenizer, _ = factory.create()
+        model = model.to(device)
+
+        # [NOTE]: trainable parameters
+        for name, param in model.image_encoder.named_parameters():
+            if 'lora' in name:
+                param.requires_grad = True
+
+        for name, param in model.named_parameters():
+            print(f'{name}: {param.requires_grad}')
+
+        text_embeddings = zeroshot_weights(model.clip, tokenizer, classes, prompts, device)
+        # [NOTE]: MAE optimizer, update only image encoder
+        if self._config.optimizer == 'adam':
+            eps = 1e-8
+            optimizer = torch.optim.AdamW(model.image_encoder.parameters(),
+                    eps=eps, lr=self._config.lr, betas=(0.9, 0.95), weight_decay=self._config.weight_decay)
+        elif self._config.optimizer == 'sgd':
+            optimizer = torch.optim.SGD(model.image_encoder.parameters(), lr=self._config.lr, weight_decay=self._config.weight_decay)
+        else:
+            raise TypeError
+
+        tta_data_loader = torch.utils.data.DataLoader(
+                    tta_dataset,
+                    batch_size=1, shuffle=False,
+                    num_workers=num_workers, pin_memory=pin_memory)
+
+        top1 = AverageMeter('Acc@1', ':6.2f', Summary.AVERAGE)
+        top5 = AverageMeter('Acc@5', ':6.2f', Summary.AVERAGE)
+
+        progress = ProgressMeter(
+            len(tta_data_loader),
+            [top1, top5],
+            prefix='Test: ')
+
+        selection_p = 0.1
+
+        for i, (images, target) in tqdm(enumerate(tta_data_loader)):
+
+            for k in range(len(images)):
+                images[k] = images[k].to(device)
+            target = target.to(device)
+            image = images[0]
+            images = torch.cat(images, dim=0)
+
+            # [TODO]: should load only LoRA and Decoder, not update text_encoder
+            model.mae.load_state_dict(status)
+            for j in range(self._config.epochs):
+                image_features = model.clip.image_encode(images)
+                image_features = image_features / image_features.norm(dim=-1, keepdim=True)
+                output = model.clip.logit_scale.exp() * (image_features @ text_embeddings)
+                output, _ = select_confident_samples(output, selection_p)
+                mem_loss = avg_entropy(output)
+                mae_loss, reconstruction, mask = model.mae(images)
+                loss = self._mem_weight * mem_loss + self._mae_weight * mae_loss
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+ 
+            # [NOTE]: inference
+            model.eval()
+            model.clip = model.clip.to(device) # why?
+            with torch.no_grad():
+                with torch.cuda.amp.autocast():
+                    image_features = model.clip.image_encode(image)
+                    image_features /= image_features.norm(dim=-1, keepdim=True)
+                    output = image_features @ text_embeddings
+
+            # measure accuracy and record loss
+            acc1, acc5 = accuracy(output, target, topk=(1, 5))
+            top1.update(acc1[0], image.size(0))
+            top5.update(acc5[0], image.size(0))
+
+            if (i+1) % 200 == 0:
+                progress.display(i)
+
+        return top1.avg.item(), top5.avg.item()
+
+
 
 
 class MEMLoRATPTTTARunner():
