@@ -162,9 +162,10 @@ def process(rank, world_size, cfg):
                 datasets = {}
                 for ds in cfg.data.dataset['tta']:
                     datasets[ds] = cfg.data.dataset.meta[ds]
+
                 # [NOTE]: extract valid TTA method
                 tta_config = {}
-                for m in cfg.tta['enable']:
+                for m in cfg.tta['params']:
                     tta_config[m] = cfg.tta[m]
                 cfg.tta = OmegaConf.create(tta_config)
 
