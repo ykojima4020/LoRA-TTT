@@ -149,7 +149,7 @@ tta:
     batch_size: 64
     epochs: 1
     optimizer: 'adam'
-    loss: ['mem']
+    loss: ['mae', 'mem']
     mae:
       weight: 1
     mem:
@@ -169,5 +169,6 @@ tta:
 world_size: 1
 
 reconst: 'feature'
-wandb_project: 'test'
-output: './output'
+wandb_project: 'mae_clip_tta'
+output: './test'
+finetune: false

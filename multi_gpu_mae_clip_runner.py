@@ -30,7 +30,7 @@ from misc.config import get_config, load_config
 from misc.lr_scheduler import build_scheduler
 from misc.logger import get_logger
 from misc.optimizer import build_optimizer
-from mae_clip_runner import run_tta
+from tta_pipeline import run_tta
 
 import random
 
@@ -40,6 +40,8 @@ def get_args_parser():
     parser.add_argument('--reconst', choices=['pixel', 'feature'], help='a kind of reconstruction')
     parser.add_argument('--opts', help="Modify config options by adding 'KEY=VALUE' list. ", default=None, nargs='+')
     parser.add_argument('--test', action='store_true')
+    parser.add_argument('--finetune', action='store_true')
+    parser.add_argument('--checkpoint', type=str, help='path to a pth file')
     parser.add_argument('--wandb', action='store_true')
     return parser
 
@@ -75,6 +77,30 @@ def process(rank, world_size, cfg):
     model, tokenizer, transform = factory.create()
     model = model.to(rank)
 
+
+    tta_datasets = {}
+    for ds in cfg.data.dataset['tta']:
+        tta_datasets[ds] = cfg.data.dataset.meta[ds]
+
+    # [NOTE]: extract valid TTA method
+    tta_config = {}
+    for m in cfg.tta['params']:
+        tta_config[m] = cfg.tta[m]
+    cfg.tta = OmegaConf.create(tta_config)
+
+    if not cfg.finetune:
+        if cfg.checkpoint:
+            status = torch.load(cfg.checkpoint, map_location=device)
+        else:
+            status = {'model': model.mae.state_dict()}
+        stats = run_tta(factory, status['model'], tta_datasets, cfg.tta)
+        if cfg.wandb:
+            wandb.log(stats)
+        logger.info(stats)
+        return
+
+
+    # [NOTE]: Start MAE fine-tuning
     for name, param in model.image_encoder.named_parameters():
         if 'lora' in name:
             param.requires_grad = True

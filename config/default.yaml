@@ -78,11 +78,6 @@ model:
     dropout: 0.01
     layers_to_transform: [0,1,2,3,4,5,6,7,8,9,10,11]
 
-checkpoint:
-  auto_resume: true
-  resume: ''
-  max_kept: -1
-
 model_name: '' # display name in the logger
 test: false
 output: './tmp'
@@ -91,4 +86,5 @@ device: 'cuda'
 world_size: 1
 type: 'open'
 reconst: 'feature'
-tta_only: False
+finetune: false
+checkpoint: false
