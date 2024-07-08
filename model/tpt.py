@@ -22,7 +22,7 @@ _tokenizer = _Tokenizer(bpe_path=f'{script_dir}/bpe_simple_vocab_16e6.txt.gz')
 
 DOWNLOAD_ROOT='~/.cache/clip'
 
-def tokenize(texts: Union[str, List[str]], context_length: int = 77, truncate: bool = False) -> torch.LongTensor:
+def tokenize(texts: Union[str, List[str]], context_length: int = 35, truncate: bool = False) -> torch.LongTensor:
     """ 
     Returns the tokenized representation of given input string(s)
     This function comes from https://github.com/azshue/TPT/blob/main/clip/clip.py#L196-L232

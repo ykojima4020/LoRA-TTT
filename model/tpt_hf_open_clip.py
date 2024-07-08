@@ -104,9 +104,7 @@ class TPTHFOpenCLIP(nn.Module):
             with torch.no_grad():
                 image_features = self.image_encode(batch.type(self.dtype))
             image_features = image_features / image_features.norm(dim=-1, keepdim=True)
-
             text_features = self.get_text_features()
-    
             logit_scale = self.logit_scale.exp()
             logits = logit_scale * image_features @ text_features.t()
             return logits
@@ -131,7 +129,7 @@ class TPTTextEncoder(nn.Module):
         self.dtype = dtype
 
     def forward(self, prompts, tokenized_prompts):
-        x = prompts + self.positional_embedding.type(self.dtype) # x.shape torch.Size([1000, 77, 512])
+        x = prompts + self.positional_embedding.type(self.dtype)[:35, :] # x.shape torch.Size([1000, 77, 512])
         # [NOTE]: confirmed that x is the same as original TPT at this point.
 
         # [NOTE]: this process is refered as

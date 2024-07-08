@@ -9,9 +9,9 @@ class Evaluator():
     def __call__(self):
         raise NotImplementedError
 
-class ZeroShotImageNetEvaluator(Evaluator):
+class ZeroShotEvaluator(Evaluator):
 
-    def __init__(self, tokenizer, dataset, prompts, classes, device, batch_size=32, num_workers=2):
+    def __init__(self, tokenizer, dataset, prompts, classes, device, batch_size=64, token_max_length=77, num_workers=2):
         self._tokenizer = tokenizer
         self._imagenet_classes = classes
         self._prompts = prompts
@@ -22,6 +22,7 @@ class ZeroShotImageNetEvaluator(Evaluator):
         self._loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, num_workers=num_workers)
         self._device = device
         self._zeroshot_weights = None
+        self._token_max_length = token_max_length
 
     def _zeroshot_classifier(self, model, classnames, templates):
         with torch.no_grad():
@@ -29,8 +30,7 @@ class ZeroShotImageNetEvaluator(Evaluator):
             for classname in tqdm(classnames):
                 # 80 patterns per class
                 texts = [template.format(classname) for template in templates] #format with class
-                max_length = 15
-                tokens = self._tokenizer(texts, padding=True, truncation=True, max_length=max_length)
+                tokens = self._tokenizer(texts, padding=True, truncation=True, max_length=self._token_max_length)
                 batch = {key: values.to(self._device) for key, values in tokens.items()}
                 class_embeddings = model.text_encode(input_ids=batch["input_ids"], attention_mask=batch["attention_mask"]) #embed with text encoder
                 class_embeddings /= class_embeddings.norm(dim=-1, keepdim=True) # the norm shape is torch.Size([80, 1])
