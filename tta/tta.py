@@ -234,11 +234,22 @@ class MEMLoRATTARunner():
             print(f'{name}: {param.requires_grad}')
 
         text_embeddings = zeroshot_weights(model.clip, tokenizer, classes, prompts, device)
-        # [NOTE]: MAE optimizer, update only image encoder
+        # [NOTE]: optimizer, update only image encoder
+
+        scale_params = [p for name, p in model.image_encoder.named_parameters() if 'lora_B.default.scale' in name]
+        other_params = [p for name, p in model.image_encoder.named_parameters() if 'lora_B.default.scale' not in name]
+
+        eps = 1e-8
+        param_groups = [
+            {'params': other_params, 'lr': self._config.lr, 'eps': eps, 'betas': (0.9, 0.95), 'weight_decay': self._config.weight_decay},
+            {'params': scale_params, 'lr': self._config.lr, 'eps': eps, 'betas': (0.9, 0.95), 'weight_decay': self._config.weight_decay}]
+
         if self._config.optimizer == 'adam':
             eps = 1e-8
             optimizer = torch.optim.AdamW(model.image_encoder.parameters(),
                     eps=eps, lr=self._config.lr, betas=(0.9, 0.95), weight_decay=self._config.weight_decay)
+            # print(param_groups)
+            # optimizer = torch.optim.AdamW(param_groups)
         elif self._config.optimizer == 'sgd':
             optimizer = torch.optim.SGD(model.image_encoder.parameters(), lr=self._config.lr, weight_decay=self._config.weight_decay)
         else:
