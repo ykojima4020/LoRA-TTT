@@ -23,10 +23,8 @@ from trainer.validater import SimpleValidater
 from evaluator.evaluator import ZeroShotEvaluator
 from evaluator.imagenet_config import simple_prompts, ensemble_prompts, imagenet_classes
 from evaluator.imagenet_variant_config import imagenet_a_classes, imagenet_r_classes
-from tta import TTARunner
 
-from misc.transforms import get_open_clip_vitb16_transforms, get_tta_transforms, get_tta_transforms_color
-from misc.config import get_config, load_config
+from misc.config import get_config
 from misc.lr_scheduler import build_scheduler
 from misc.logger import get_logger
 from misc.optimizer import build_optimizer
@@ -90,7 +88,7 @@ def process(rank, world_size, cfg):
 
     if not cfg.finetune:
         if cfg.checkpoint:
-            status = torch.load(cfg.checkpoint, map_location=device)
+            status = torch.load(cfg.checkpoint, map_location=cfg.device)
         else:
             status = {'model': model.mae.state_dict()}
         stats = run_tta(factory, status['model'], tta_datasets, cfg.tta)

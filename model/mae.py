@@ -185,7 +185,7 @@ class PixelMAE(torch.nn.Module):
         loss = torch.mean((reconstruction - image) ** 2 * mask) / self.mask_ratio
         return loss, reconstruction, mask
 
-class FeatureMAE(torch.nn.Module):
+class FeatureEMAMAE(torch.nn.Module):
     def __init__(self, encoder, decoder, mask_ratio, decay=0.9999) -> None: 
         super().__init__()
 
@@ -202,6 +202,27 @@ class FeatureMAE(torch.nn.Module):
 
         # [NOTE]: extract class token features from EMA encoder
         image_features = self.ema.module(image)[0][0, :, :]
+
+        features, backward_indexes = self.encoder(image, self._shuffler)
+        reconstruction, mask = self.decoder(features,  backward_indexes)
+
+        loss = torch.mean((reconstruction - image_features) ** 2) / self.mask_ratio
+        # [NOTE]: output image as dummy
+        return loss, image, mask
+
+class FeatureMAE(torch.nn.Module):
+    def __init__(self, encoder, decoder, mask_ratio) -> None:
+        super().__init__()
+
+        self._shuffler = PatchShuffle(mask_ratio)
+        self.encoder = encoder
+        self.decoder = decoder
+        self.mask_ratio = mask_ratio
+
+    def forward(self, image):
+        # [NOTE]: extract class token features from EMA encoder
+        with torch.no_grad():
+            image_features = self.encoder(image)[0][0, :, :]
 
         features, backward_indexes = self.encoder(image, self._shuffler)
         reconstruction, mask = self.decoder(features,  backward_indexes)

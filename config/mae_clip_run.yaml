@@ -144,11 +144,13 @@ train:
 
 tta:
   peft:
-    lr: 1e-3
-    weight_decay: 0.2
     batch_size: 64
     epochs: 1
     optimizer: 'adam'
+    lr: 1e-3
+    weight_decay: 0.2
+    eps: 1e-8
+    betas: [0.9, 0.95]
     loss: ['mae', 'mem']
     mae:
       weight: 1

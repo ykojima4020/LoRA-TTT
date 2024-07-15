@@ -17,7 +17,7 @@ sys.path.append('../')
 from evaluator.evaluator import ZeroShotEvaluator
 from evaluator.imagenet_config import simple_prompts, ensemble_prompts, imagenet_classes
 from evaluator.imagenet_variant_config import imagenet_a_classes, imagenet_r_classes
-from tta import TPTTTARunner, MEMLoRATTARunner, MAELoRATTARunner, MAEMEMLoRATTARunner
+from tta import TPTTTARunner, LoRATTARunner, MAELoss, MEMLoss, MAEMEMLoss
 
 from misc.tpt_transforms import AugMixAugmenter
 from misc.logger import get_logger
@@ -86,13 +86,15 @@ def run_tta(factory, status, datasets, config):
             loss = config['peft']['loss']
             if ('mem' in loss) and not ('mae' in loss):
                 # [NOTE]: MEM for updating LoRA
-                tta_runner = MEMLoRATTARunner(config['peft'])
+                loss = MEMLoss()
             elif not ('mem' in loss) and ('mae' in loss):
                 # [NOTE]: MAE for updating LoRA
-                tta_runner = MAELoRATTARunner(config['peft'])
+                loss = MAELoss()
             elif ('mem' in loss) and ('mae' in loss):
                 # [NOTE]: MAE + MEM for updating LoRA
-                tta_runner = MAEMEMLoRATTARunner(config['peft'])
+                loss = MAEMEMLoss(config['peft']['mae']['weight'],
+                                  config['peft']['mem']['weight'])
+            tta_runner = LoRATTARunner(config['peft'], loss)
         else:
             raise TypeError
 
