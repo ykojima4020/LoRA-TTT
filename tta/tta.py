@@ -1,6 +1,7 @@
 import torch
 import torchvision
 import numpy as np
+import os
 
 import sys
 sys.path.append('../')
@@ -57,7 +58,7 @@ class MAEMEMLoss():
 
 class LoRATTARunner():
 
-    def __init__(self, config, loss):
+    def __init__(self, config, loss, data_name):
         print(f'{self} created.')
         print(config)
         self._config = config
@@ -70,6 +71,16 @@ class LoRATTARunner():
             self._loss = loss
         else:
             raise TypeError
+
+        self._data_name = data_name
+
+        # 保存先のディレクトリ
+        self._save_dir = f'/data2/yuto/mae_clip/notebooks/loss/embed/{self._loss.__class__.__name__}_with_finetuning/{self._data_name}'
+
+        # ディレクトリが存在しない場合は作成する
+        if not os.path.exists(self._save_dir):
+            os.makedirs(self._save_dir)
+
 
     def __call__(self, factory, status,
                  tta_dataset, prompts, classes,
@@ -101,6 +112,9 @@ class LoRATTARunner():
             [top1, top5],
             prefix='Test: ')
 
+        embeddings = []
+        labels = []
+
         for i, (images, target) in tqdm(enumerate(tta_data_loader)):
 
             for k in range(len(images)):
@@ -124,8 +138,12 @@ class LoRATTARunner():
             with torch.no_grad():
                 with torch.cuda.amp.autocast():
                     image_features = model.clip.image_encode(image)
+                    embed = image_features.to('cpu').numpy()
                     image_features /= image_features.norm(dim=-1, keepdim=True)
                     output = image_features @ text_embeddings
+
+            embeddings.append(embed)
+            labels.append(target.to('cpu').numpy())
 
             # measure accuracy and record loss
             acc1, acc5 = accuracy(output, target, topk=(1, 5))
@@ -134,6 +152,11 @@ class LoRATTARunner():
 
             if (i+1) % 200 == 0:
                 progress.display(i)
+
+        embeddings = np.vstack(embeddings)
+        labels = np.concatenate(labels)
+
+        np.savez(os.path.join(self._save_dir, 'embed.npz'), array1=embeddings, array2=labels)
 
         return top1.avg.item(), top5.avg.item()
 

@@ -94,7 +94,7 @@ def run_tta(factory, status, datasets, config):
                 # [NOTE]: MAE + MEM for updating LoRA
                 loss = MAEMEMLoss(config['peft']['mae']['weight'],
                                   config['peft']['mem']['weight'])
-            tta_runner = LoRATTARunner(config['peft'], loss)
+            tta_runner = LoRATTARunner(config['peft'], loss, name)
         else:
             raise TypeError
 
