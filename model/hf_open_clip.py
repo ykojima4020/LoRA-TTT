@@ -21,8 +21,13 @@ class HFOpenCLIPImageEncoder(nn.Module):
         self.transformer = model.encoder 
         self.ln_pre = model.pre_layrnorm
         self.ln_post = model.post_layernorm
+        self.attn_weight = None
+
+    def get_attn(self):
+        return self.attn_weight
 
     def forward(self, x, shuffler=None): 
+        self.attn_weight = None
         x = self.patchify(x)							# -> torch.Size([B, 768, 14, 14]) 
         x = rearrange(x, 'b c h w -> b (h w) c')				# -> torch.Size([B, 196, 768])
         x = x + self.pos_embedding[1:]
@@ -38,7 +43,9 @@ class HFOpenCLIPImageEncoder(nn.Module):
         x = torch.cat([cls_token_pos.expand(x.shape[0], 1, -1), x], dim=1) 	# -> torch.Size([B, 197, 768])
 
         x = self.ln_pre(x)							# -> torch.Size([B, 197, 768])
-        x = self.transformer(x).last_hidden_state				# -> torch.Size([B, 197, 768]) 
+        x = self.transformer(x, output_attentions=True)				# -> torch.Size([B, 197, 768])
+        self.attn_weight = x.attentions
+        x = x.last_hidden_state							# -> torch.Size([B, 197, 768])
         x = self.ln_post(x)							# -> torch.Size([B, 197, 768]
 
         x = rearrange(x, 'b t c -> t b c')
