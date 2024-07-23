@@ -4,7 +4,7 @@ from transformers import CLIPModel, CLIPProcessor
 
 from model.clip import CLIP
 from model.modules import TextEncoder, ProjectionHead
-from model.mae import ImageEncoder, MAEPixelDecoder, MAEFeatureDecoder, PixelMAE, FeatureMAE
+from model.mae import ImageEncoder, MAEPixelDecoder, MAEFeatureDecoder, PixelMAE, FeatureMAE, FeatureMAEWithoutDecoder
 from model.mae_clip import MAECLIP
 
 from model.models_rils import RILSMAEEncoder
@@ -250,7 +250,9 @@ class PretrainedHFOpenCLIPFactory(Factory):
                 image_size=self._image_size, patch_size=self._patch_size,
                 emb_dim=self._emb_dim, num_layer=self._decoder_layer,
                 num_head=self._decoder_head)
-            mae = FeatureMAE(image_encoder, image_decoder, self._mask_ratio)
+            # mae = FeatureMAE(image_encoder, image_decoder, self._mask_ratio)
+            mae = FeatureMAEWithoutDecoder(image_encoder, None, self._mask_ratio)
+            print("FeatureMAEWithoutDecoder is created.")
         else:
             raise TypeError(f'{self._mae} is invalid.')
 
