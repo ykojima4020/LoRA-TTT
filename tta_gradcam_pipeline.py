@@ -64,7 +64,11 @@ def main():
     model, tokenizer, transform = factory.create()
     model = model.to(device)
     # without fine-tuning, deep copy is really important because state_dict is refered and can be changed during TTA.
-    status = {'model': copy.deepcopy(model.mae.state_dict())}
+    if config.finetune:
+        status = torch.load(config.checkpoint, map_location=device)
+        print(f'{config.checkpoint} is loaded.')
+    else:
+        status = {'model': copy.deepcopy(model.mae.state_dict())}
 
     # [NOTE]: Data augmentation
     normalize = transforms.Normalize(mean=[0.48145466, 0.4578275, 0.40821073],
@@ -133,7 +137,10 @@ def main():
                 # [NOTE]: MAE + MEM for updating LoRA
                 loss = MAEMEMLoss(tta_config['peft']['mae']['weight'],
                                   tta_config['peft']['mem']['weight'])
-            save_dir = f'./gradcam/{name}/{loss.__class__.__name__}/' 
+            if config.finetune:
+                save_dir = f'./gradcam/{name}/{loss.__class__.__name__}_with_finetune/'
+            else:
+                save_dir = f'./gradcam/{name}/{loss.__class__.__name__}/'
             tta_runner = LoRATTARunnerWithGradCAM(tta_config['peft'], loss, save_dir=save_dir)
         else:
             raise TypeError
