@@ -56,7 +56,7 @@ class HFOpenCLIPImageProjector(nn.Module):
 
 
 class HFOpenCLIP(nn.Module):
-    def __init__(self, image_encoder=None, image_projector=None, clip=None, temperature=0.07):
+    def __init__(self, image_encoder=None, image_projector=None, clip=None):
         super().__init__()
         if not isinstance(clip, transformers.models.clip.modeling_clip.CLIPModel):
             raise TypeError
@@ -64,9 +64,7 @@ class HFOpenCLIP(nn.Module):
         self._image_projector = image_projector
         self.clip = clip
 
-        self._temperature = temperature
         self.logit_scale = clip.logit_scale 
-        # self.logit_scale = nn.Parameter(torch.ones([]) *  self._temperature)
         self.cross_entropy = nn.CrossEntropyLoss()
 
     def loss(self, image_x, text_x):

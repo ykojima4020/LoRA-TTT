@@ -240,6 +240,7 @@ class FeatureMAEWithoutDecoder(torch.nn.Module):
             raise TypeError
         self._shuffler = PatchShuffle(mask_ratio)
         self.encoder = encoder
+        self.decoder = torch.nn.Module()
         self.mask_ratio = mask_ratio
 
     def forward(self, image):

@@ -101,24 +101,13 @@ model:
       size: 224
       patch_size: 16
       embeddings: 768
-      layer: 12
-      head: 12
     decoder:
       layer: 8
       head: 16
-      embeddings: 512
-  text:
-    encoder:
-      name: 'distilbert-base-uncased' 
-      pretrained: true
-      trainable: false
-      embeddings: 768
-  clip:
-    projection: 256
-    dropout: 0.1
-    temperature: 1
   mae:
     mask_ratio: 0.75
+    reconst: 'feature'
+    decoder: true
   loss:
     alpha: 1
   peft:
@@ -170,7 +159,6 @@ tta:
 
 world_size: 1
 
-reconst: 'feature'
 wandb_project: 'mae_clip_tta'
 output: './test'
 finetune: false
