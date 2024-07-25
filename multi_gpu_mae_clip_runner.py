@@ -35,7 +35,6 @@ import random
 def get_args_parser():
     parser = argparse.ArgumentParser('Tuning hyper parameters used in LoRA for TTT', add_help=False)
     parser.add_argument('--cfg', type=str, required=True, help='path to a config file')
-    parser.add_argument('--reconst', choices=['pixel', 'feature'], help='a kind of reconstruction')
     parser.add_argument('--opts', help="Modify config options by adding 'KEY=VALUE' list. ", default=None, nargs='+')
     parser.add_argument('--test', action='store_true')
     parser.add_argument('--finetune', action='store_true')
@@ -71,7 +70,7 @@ def process(rank, world_size, cfg):
         logger.info(cfg)
 
     # [NOTE]: factory used in this script is only for Hugging Face.
-    factory = PretrainedHFOpenCLIPFactory(cfg.model, mae=cfg.reconst)
+    factory = PretrainedHFOpenCLIPFactory(cfg.model)
     model, tokenizer, transform = factory.create()
     model = model.to(rank)
 

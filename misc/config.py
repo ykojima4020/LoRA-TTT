@@ -43,9 +43,6 @@ def get_config(args):
     if hasattr(args, 'device') and args.device:
         cfg.device = args.device
 
-    if hasattr(args, 'reconst') and args.reconst:
-        cfg.reconst = args.reconst
-
     if hasattr(args, 'finetune') and args.finetune:
         cfg.finetune = args.finetune
 

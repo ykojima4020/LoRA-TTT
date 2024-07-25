@@ -16,8 +16,7 @@ data:
         prefix: gcc-train-{000000..001242}.tar
         length: 2248678
 
-    train:
-      - gcc3m_005
+    train: ['gcc3m_005']
 
   img_aug:
   text_aug:
@@ -68,6 +67,8 @@ model:
     temperature: 1
   mae:
     mask_ratio: 0.75
+    reconst: 'feature'
+    decoder: true
   loss:
     alpha: 1
   peft:
@@ -85,6 +86,5 @@ wandb: false
 device: 'cuda'
 world_size: 1
 type: 'open'
-reconst: 'feature'
 finetune: false
 checkpoint: false

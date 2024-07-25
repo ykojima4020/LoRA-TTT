@@ -4,7 +4,7 @@ from transformers import CLIPModel, CLIPProcessor
 
 from model.clip import CLIP
 from model.modules import TextEncoder, ProjectionHead
-from model.mae import ImageEncoder, MAEPixelDecoder, MAEFeatureDecoder, PixelMAE, FeatureMAE
+from model.mae import ImageEncoder, MAEPixelDecoder, MAEFeatureDecoder, PixelMAE, FeatureMAE, FeatureMAEWithoutDecoder
 from model.mae_clip import MAECLIP
 
 from model.models_rils import RILSMAEEncoder
@@ -198,7 +198,7 @@ class PretrainedOpenCLIPDecoderEncoderFineTuneFactory(Factory):
 
 
 class PretrainedHFOpenCLIPFactory(Factory):
-    def __init__(self, cfg, mae='pixel'):
+    def __init__(self, cfg):
         # [NOTE]: need to create a decoder
         self._image_size = cfg.image.encoder.size
         self._patch_size = cfg.image.encoder.patch_size
@@ -208,10 +208,10 @@ class PretrainedHFOpenCLIPFactory(Factory):
 
         self._alpha = cfg.loss.alpha
         self._mask_ratio = cfg.mae.mask_ratio
-        self._temperature = cfg.clip.temperature
 
         # [TODO]: this parameter should be managed in the config.
-        self._mae = mae
+        self._mae_loss_type = cfg.mae.reconst
+        self._mae_decoder = cfg.mae.decoder
 
         self._peft = None
         if 'peft' in cfg:
@@ -237,22 +237,26 @@ class PretrainedHFOpenCLIPFactory(Factory):
         else:
             raise TypeError(f'{self._peft.name} is not supported.')
 
-        clip = HFOpenCLIP(image_encoder, image_projector, hf_open_clip_model, self._temperature)
+        clip = HFOpenCLIP(image_encoder, image_projector, hf_open_clip_model)
 
-        if self._mae == 'pixel':
+        if self._mae_loss_type == 'pixel':
             image_decoder = MAEPixelDecoder(
                 image_size=self._image_size, patch_size=self._patch_size,
                 emb_dim=self._emb_dim, num_layer=self._decoder_layer,
                 num_head=self._decoder_head)
             mae = PixelMAE(image_encoder, image_decoder, self._mask_ratio)
-        elif self._mae == 'feature':
+        elif self._mae_loss_type == 'feature':
             image_decoder = MAEFeatureDecoder(
                 image_size=self._image_size, patch_size=self._patch_size,
                 emb_dim=self._emb_dim, num_layer=self._decoder_layer,
                 num_head=self._decoder_head)
-            mae = FeatureMAE(image_encoder, image_decoder, self._mask_ratio)
+            if self._mae_decoder:
+                mae = FeatureMAE(image_encoder, image_decoder, self._mask_ratio)
+            else:
+                mae = FeatureMAEWithoutDecoder(image_encoder, None, self._mask_ratio)
+            print(f"{type(mae).__name__} is created.")
         else:
-            raise TypeError(f'{self._mae} is invalid.')
+            raise TypeError(f'{self._mae_loss_type} is invalid.')
 
         # [NOTE]: creating model...
         model = MAECLIP(image_encoder, clip, mae, alpha=self._alpha)
