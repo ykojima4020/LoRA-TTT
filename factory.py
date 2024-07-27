@@ -198,7 +198,7 @@ class PretrainedOpenCLIPDecoderEncoderFineTuneFactory(Factory):
 
 
 class PretrainedHFOpenCLIPFactory(Factory):
-    def __init__(self, cfg):
+    def __init__(self, cfg, tpt=False):
         # [NOTE]: need to create a decoder
         self._image_size = cfg.image.encoder.size
         self._patch_size = cfg.image.encoder.patch_size
@@ -213,11 +213,12 @@ class PretrainedHFOpenCLIPFactory(Factory):
         self._mae_loss_type = cfg.mae.reconst
         self._mae_decoder = cfg.mae.decoder
 
+        self._tpt = tpt
         self._peft = None
         if 'peft' in cfg:
             self._peft = cfg.peft
 
-    def create(self):
+    def create(self, tpt=False):
 
         # [NOTE]: I don't know what kinds of dataset are used in the model.
         hf_open_clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch16")
@@ -237,7 +238,14 @@ class PretrainedHFOpenCLIPFactory(Factory):
         else:
             raise TypeError(f'{self._peft.name} is not supported.')
 
-        clip = HFOpenCLIP(image_encoder, image_projector, hf_open_clip_model)
+        if self._tpt:
+            text_encoder = TPTTextEncoder(hf_open_clip_model.text_model, hf_open_clip_model.dtype)
+            # [NOTE]: ImageProjector is also used for TextProjector
+            text_projector = HFOpenCLIPImageProjector(hf_open_clip_model.text_projection)
+            clip = TPTHFOpenCLIP(image_encoder, image_projector, text_encoder, text_projector, hf_open_clip_model)
+        else:
+            clip = HFOpenCLIP(image_encoder, image_projector, hf_open_clip_model)
+
 
         if self._mae_loss_type == 'pixel':
             image_decoder = MAEPixelDecoder(
@@ -272,78 +280,3 @@ class PretrainedHFOpenCLIPFactory(Factory):
         transform = get_open_clip_vitb16_transforms
         return model, tokenizer, transform
 
-# [TODO]: this factory shoud be integrated into PretrainedHFOpenCLIPFactory
-class PretrainedTPTHFOpenCLIPFactory(Factory):
-
-    def __init__(self, cfg, mae='pixel'):
-        # [NOTE]: need to create a decoder
-        self._image_size = cfg.image.encoder.size
-        self._patch_size = cfg.image.encoder.patch_size
-        self._emb_dim = cfg.image.encoder.embeddings
-        self._decoder_layer = cfg.image.decoder.layer
-        self._decoder_head = cfg.image.decoder.head
-
-        self._alpha = cfg.loss.alpha
-        self._mask_ratio = cfg.mae.mask_ratio
-        self._temperature = cfg.clip.temperature
-
-        # [TODO]: this parameter should be managed in the config.
-        self._mae = mae
-
-        self._peft = None
-        if 'peft' in cfg:
-            self._peft = cfg.peft
-
-    def create(self):
-
-        # [NOTE]: I don't know what kinds of dataset are used in the model.
-        hf_open_clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch16")
-        processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch16")
-
-        image_encoder = HFOpenCLIPImageEncoder(hf_open_clip_model.vision_model)
-        image_projector = HFOpenCLIPImageProjector(hf_open_clip_model.visual_projection)
-        text_encoder = TPTTextEncoder(hf_open_clip_model.text_model, hf_open_clip_model.dtype)
-        # [NOTE]: ImageProjector is also used for TextProjector
-        text_projector = HFOpenCLIPImageProjector(hf_open_clip_model.text_projection)
-
-        if self._peft.name == 'lora':
-            config = LoraConfig(r=self._peft.r,
-                                target_modules=self._peft.target_modules,
-                                lora_alpha=(self._peft.r * self._peft.alpha_r_scale),
-                                lora_dropout=self._peft.dropout,
-                                layers_to_transform=self._peft.layers_to_transform
-                               )
-            image_encoder = get_peft_model(image_encoder, config)
-        else:
-            raise TypeError(f'{self._peft.name} is not supported.')
-
-        clip = TPTHFOpenCLIP(image_encoder, image_projector, text_encoder, text_projector, hf_open_clip_model, self._temperature)
-
-        if self._mae == 'pixel':
-            image_decoder = MAEPixelDecoder(
-                image_size=self._image_size, patch_size=self._patch_size,
-                emb_dim=self._emb_dim, num_layer=self._decoder_layer,
-                num_head=self._decoder_head)
-            mae = PixelMAE(image_encoder, image_decoder, self._mask_ratio)
-        elif self._mae == 'feature':
-            image_decoder = MAEFeatureDecoder(
-                image_size=self._image_size, patch_size=self._patch_size,
-                emb_dim=self._emb_dim, num_layer=self._decoder_layer,
-                num_head=self._decoder_head)
-            mae = FeatureMAE(image_encoder, image_decoder, self._mask_ratio)
-        else:
-            raise TypeError(f'{self._mae} is invalid.')
-
-        # [NOTE]: creating model...
-        model = MAECLIP(image_encoder, clip, mae, alpha=self._alpha)
-
-        # [NOTE]: all the trainable parameters are requires_grad = False.
-        for name, param in model.named_parameters():
-            param.requires_grad = False
-
-        tokenizer = processor.tokenizer
-        tokenizer = BertTokenizer(tokenizer)
-
-        # [TODO]: should be set transform designed for
-        transform = get_open_clip_vitb16_transforms
-        return model, tokenizer, transform

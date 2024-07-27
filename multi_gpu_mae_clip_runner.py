@@ -70,10 +70,15 @@ def process(rank, world_size, cfg):
         logger.info(cfg)
 
     # [NOTE]: factory used in this script is only for Hugging Face.
-    factory = PretrainedHFOpenCLIPFactory(cfg.model)
+    if 'tp' in cfg.tta['params']:
+        factory = PretrainedHFOpenCLIPFactory(cfg.model, tpt=True)
+        logger.info('TPT enable.')
+    else:
+        factory = PretrainedHFOpenCLIPFactory(cfg.model)
+        logger.info('TPT disable.')
+
     model, tokenizer, transform = factory.create()
     model = model.to(rank)
-
 
     tta_datasets = {}
     for ds in cfg.data.dataset['tta']:
@@ -88,8 +93,10 @@ def process(rank, world_size, cfg):
     if not cfg.finetune:
         if cfg.checkpoint:
             status = torch.load(cfg.checkpoint, map_location=cfg.device)
+            logger.info(f'{cfg.checkpoint} loaded.')
         else:
             status = {'model': model.mae.state_dict()}
+            logger.info('initial weight')
         stats = run_tta(factory, status['model'], tta_datasets, cfg.tta)
         if cfg.wandb:
             wandb.log(stats)

@@ -17,7 +17,7 @@ sys.path.append('../')
 from evaluator.evaluator import ZeroShotEvaluator
 from evaluator.imagenet_config import simple_prompts, ensemble_prompts, imagenet_classes
 from evaluator.imagenet_variant_config import imagenet_a_classes, imagenet_r_classes
-from tta import TPTTTARunner, LoRATTARunner, MAELoss, MEMLoss, MAEMEMLoss
+from tta import LoRATTARunner, TextPromptTTARunner, MAELoss, MEMLoss, MAEMEMLoss
 
 from misc.tpt_transforms import AugMixAugmenter
 from misc.logger import get_logger
@@ -76,13 +76,21 @@ def run_tta(factory, status, datasets, config):
             # [NOTE]: remove under bars in classes according to TPT or C-TPT.
             classes = [cls.replace('_', ' ') for cls in classes]
 
-        # [TODO]: Choose TTA algorithm here.
-        if ('peft' in config.keys()) and ('tpt' in config.keys()):
+
+        if ('peft' in config.keys()) and ('tp' in config.keys()):
             raise NotImplementedError
-        elif not ('peft' in config.keys()) and ('tpt' in config.keys()):
-            # [NOTE]: MEM for updating Text Prompts
-            tta_runner = TPTTTARunner(config['tpt'])
-        elif ('peft' in config.keys()) and not ('tpt' in config.keys()):
+        elif not ('peft' in config.keys()) and ('tp' in config.keys()):
+            loss = config['tp']['loss']
+            if ('mem' in loss) and not ('mae' in loss):
+                # [NOTE]: MEM for updating LoRA
+                loss = MEMLoss(tpt=True)
+            else:
+                raise NotImplementedError
+            # [NOTE]: Choose Loss for Text Prompt here.
+            tta_runner = TextPromptTTARunner(config['tp'], loss)
+
+        elif ('peft' in config.keys()) and not ('tp' in config.keys()):
+            # [NOTE]: Choose Loss for PEFT here.
             loss = config['peft']['loss']
             if ('mem' in loss) and not ('mae' in loss):
                 # [NOTE]: MEM for updating LoRA
@@ -94,10 +102,13 @@ def run_tta(factory, status, datasets, config):
                 # [NOTE]: MAE + MEM for updating LoRA
                 loss = MAEMEMLoss(config['peft']['mae']['weight'],
                                   config['peft']['mem']['weight'])
+            else:
+                raise NotImplementedError
             tta_runner = LoRATTARunner(config['peft'], loss)
         else:
             raise TypeError
 
+        logger.info(f'{type(tta_runner)} created.')
 
         # [TODO]: first of all, calculate initial peformance before fine-tuning.
         model, tokenizer, transform = factory.create()
@@ -125,6 +136,7 @@ def run_tta(factory, status, datasets, config):
 
         top1_after_tta, top5_after_tta = tta_runner(factory, status, tta_data,
                                                     prompts, classes)
+        time_stats = tta_runner.get_time()
 
         diff_top1 = top1_after_tta - top1_before_tta
         diff_top5 = top5_after_tta - top5_before_tta
@@ -155,5 +167,6 @@ def run_tta(factory, status, datasets, config):
                      'nor_top1': float(np.mean(nor_top1s)),
                      'nor_top5': float(np.mean(nor_top5s)),
                      'all': datasets_stats}}
+    stats.update(time_stats)
     return stats
 

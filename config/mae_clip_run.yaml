@@ -146,7 +146,7 @@ tta:
     mem:
       weight: 1
 
-  tpt:
+  tp:
     lr: 5e-3
     batch_size: 64
     epochs: 1
@@ -159,6 +159,6 @@ tta:
 
 world_size: 1
 
-wandb_project: 'mae_clip_tta'
+wandb_project: 'test'
 output: './test'
 finetune: false
