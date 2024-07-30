@@ -1,4 +1,4 @@
-_base_: './default_local.yaml'
+_base_: './default.yaml'
 
 data:
   batch_size: 64
@@ -162,3 +162,4 @@ world_size: 1
 wandb_project: 'test'
 output: './test'
 finetune: false
+checkpoint: false

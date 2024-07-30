@@ -10,8 +10,6 @@ from copy import deepcopy
 from tqdm import tqdm
 from misc.utils import AvgMeter, Summary, AverageMeter, ProgressMeter
 
-import time
-
 def build_tta_optimizer(model, config):
     #[NOTE]: all the trainable parameters is in an image encoder
     if config.optimizer == 'adam':
@@ -78,12 +76,6 @@ class LoRATTARunner():
         else:
             raise TypeError
 
-        self.tta_avg_time = None
-        self.tta_infer_time = None
-
-    def get_time(self):
-        return {'time': {'average TTA': self.tta_avg_time, 'average inference': self.tta_infer_time}}
-
     def __call__(self, factory, status,
                  tta_dataset, prompts, classes,
                  num_workers=4, pin_memory=True, device='cuda'):
@@ -114,9 +106,6 @@ class LoRATTARunner():
             [top1, top5],
             prefix='Test: ')
 
-        tta_times = []
-        infer_times = []
-
         for i, (images, target) in tqdm(enumerate(tta_data_loader)):
 
             for k in range(len(images)):
@@ -124,9 +113,6 @@ class LoRATTARunner():
             target = target.to(device)
             image = images[0]
             images = torch.cat(images, dim=0)
-
-            torch.cuda.synchronize()
-            start_tta = time.time()
 
             # [TODO]: should load only LoRA and Decoder, not update text_encoder
             model.mae.load_state_dict(status)
@@ -137,12 +123,6 @@ class LoRATTARunner():
                 loss.backward()
                 optimizer.step()
 
-            torch.cuda.synchronize()
-            end_tta = time.time()
-
-            torch.cuda.synchronize()
-            start_infer = time.time()
-
             # [NOTE]: inference
             model.eval()
             with torch.no_grad():
@@ -151,11 +131,6 @@ class LoRATTARunner():
                     image_features /= image_features.norm(dim=-1, keepdim=True)
                     output = image_features @ text_embeddings
 
-            torch.cuda.synchronize()
-            end_infer = time.time()
-            tta_times.append(end_tta - start_tta)
-            infer_times.append(end_infer - start_infer)
-
             # measure accuracy and record loss
             acc1, acc5 = accuracy(output, target, topk=(1, 5))
             top1.update(acc1[0], image.size(0))
@@ -163,9 +138,6 @@ class LoRATTARunner():
 
             if (i+1) % 200 == 0:
                 progress.display(i)
-
-        self.tta_avg_time = sum(tta_times) / len(tta_times)
-        self.tta_infer_time = sum(infer_times) / len(infer_times)
 
         return top1.avg.item(), top5.avg.item()
 
@@ -182,13 +154,6 @@ class TextPromptTTARunner():
             self._loss = loss
         else:
             raise TypeError
-
-        self.tta_avg_time = None
-        self.tta_infer_time = None
-
-    def get_time(self):
-        return {'time': {'average TTA': self.tta_avg_time, 'average inference': self.tta_infer_time}}
-
 
     def __call__(self, factory, status,
                  tta_dataset, prompts, classes,
@@ -226,9 +191,6 @@ class TextPromptTTARunner():
         with torch.no_grad():
             model.clip.reset()
 
-        tta_times = []
-        infer_times = []
-
         for i, (images, target) in tqdm(enumerate(tta_data_loader)):
 
             for k in range(len(images)):
@@ -236,9 +198,6 @@ class TextPromptTTARunner():
             target = target.to(device)
             image = images[0]
             images = torch.cat(images, dim=0)
-
-            torch.cuda.synchronize()
-            start_tta = time.time()
 
             # reset the tunable prompt to its initial state
             with torch.no_grad():
@@ -251,22 +210,11 @@ class TextPromptTTARunner():
                 loss.backward()
                 optimizer.step()
 
-            torch.cuda.synchronize()
-            end_tta = time.time()
-
-            torch.cuda.synchronize()
-            start_infer = time.time()
-
             # [NOTE]: inference
             model.eval()
             with torch.no_grad():
                 with torch.cuda.amp.autocast():
                     output = model.clip(image)
-
-            torch.cuda.synchronize()
-            end_infer = time.time()
-            tta_times.append(end_tta - start_tta)
-            infer_times.append(end_infer - start_infer)
 
             # measure accuracy and record loss
             acc1, acc5 = accuracy(output, target, topk=(1, 5))
@@ -275,9 +223,6 @@ class TextPromptTTARunner():
 
             if (i+1) % 200 == 0:
                 progress.display(i)
-
-        self.tta_avg_time = sum(tta_times) / len(tta_times)
-        self.tta_infer_time = sum(infer_times) / len(infer_times)
 
         return top1.avg.item(), top5.avg.item()
 

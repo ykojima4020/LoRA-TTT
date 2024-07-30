@@ -1,6 +1,5 @@
 import os
 import sys
-from tqdm import tqdm
 import pathlib
 import argparse
 import wandb
@@ -13,7 +12,7 @@ import torch.multiprocessing as mp
 from imagenetv2_pytorch import ImageNetV2Dataset
 import numpy as np
 
-from omegaconf import OmegaConf, read_write
+from omegaconf import OmegaConf
 
 sys.path.append('../')
 from factory import PretrainedHFOpenCLIPFactory
@@ -88,23 +87,26 @@ def process(rank, world_size, cfg):
     tta_config = {}
     for m in cfg.tta['params']:
         tta_config[m] = cfg.tta[m]
+    tta_config['run_freq'] = cfg.tta.run_freq
     cfg.tta = OmegaConf.create(tta_config)
 
+    if cfg.checkpoint:
+        status = torch.load(cfg.checkpoint, map_location=cfg.device)
+        model.mae.load_state_dict(status['model'])
+        logger.info(f'{cfg.checkpoint} loaded.')
+    else:
+        status = {'model': model.mae.state_dict()}
+        logger.info('initial weight')
+
     if not cfg.finetune:
-        if cfg.checkpoint:
-            status = torch.load(cfg.checkpoint, map_location=cfg.device)
-            logger.info(f'{cfg.checkpoint} loaded.')
-        else:
-            status = {'model': model.mae.state_dict()}
-            logger.info('initial weight')
         stats = run_tta(factory, status['model'], tta_datasets, cfg.tta)
         if cfg.wandb:
             wandb.log(stats)
         logger.info(stats)
         return
 
-
     # [NOTE]: Start MAE fine-tuning
+    logger.info('Run fine-tuning.')
     for name, param in model.image_encoder.named_parameters():
         if 'lora' in name:
             param.requires_grad = True
@@ -112,7 +114,7 @@ def process(rank, world_size, cfg):
     for name, param in model.mae.decoder.named_parameters():
         param.requires_grad = True
 
-    logger.info('finetuning parameters')
+    logger.info('fine-tuning parameters.')
     if dist.get_rank() == 0:
         for name, param in model.named_parameters():
             logger.info(f'{name}: {param.requires_grad}')
@@ -138,11 +140,6 @@ def process(rank, world_size, cfg):
         dataset = ImageNetV2Dataset(transform=transform('valid')) 
         evaluator = ZeroShotEvaluator(tokenizer, dataset, ensemble_prompts, imagenet_classes, rank)
 
-    best_loss = float('inf')
-    best_tta_enhancement = float('-inf')
-    best_acc_5 = 0
-    best_acc_1 = 0
-
     logger.info('Start training')
     for epoch in range(cfg.train.start_epoch, cfg.train.epochs):
         dist.barrier()
@@ -164,22 +161,20 @@ def process(rank, world_size, cfg):
             eval_stats = evaluator(ddp_model.module.clip)
             stats = stats | eval_stats
 
-            if stats['valid']['mae_loss'] < best_loss:
-                logger.info("Best Model!")
-                best_loss = stats['valid']['mae_loss']
-                checkpoint = os.path.join(cfg.output, 'checkpoint.pth')
-                metrics = {'val_loss': stats['valid']['mae_loss'],
-                           'acc_1': stats['eval']['imagenet']['top1'],
-                           'acc_5': stats['eval']['imagenet']['top5']}
-                save_state = {
-                    'model': model_without_ddp.mae.state_dict(),
-                    'optimizer': optimizer.state_dict(),
-                    'lr_scheduler': lr_scheduler.state_dict(),
-                    'metrics': metrics,
-                    'epoch': epoch,
-                    'config': cfg
-                 }
-                torch.save(save_state, checkpoint)
+            logger.info("Save Model!")
+            checkpoint = os.path.join(cfg.output, f'checkpoint_{epoch:03}.pth')
+            metrics = {'val_loss': stats['valid']['mae_loss'],
+                       'acc_1': stats['eval']['imagenet']['top1'],
+                       'acc_5': stats['eval']['imagenet']['top5']}
+            save_state = {
+                'model': model_without_ddp.mae.state_dict(),
+                'optimizer': optimizer.state_dict(),
+                'lr_scheduler': lr_scheduler.state_dict(),
+                'metrics': metrics,
+                'epoch': epoch,
+                'config': cfg
+            }
+            torch.save(save_state, checkpoint)
 
             if ((epoch+1) % cfg.tta.run_freq == 0):
                 # [NOTE]: load best model
@@ -189,17 +184,7 @@ def process(rank, world_size, cfg):
                 else:
                     raise Exception('no checkpoint')
 
-                datasets = {}
-                for ds in cfg.data.dataset['tta']:
-                    datasets[ds] = cfg.data.dataset.meta[ds]
-
-                # [NOTE]: extract valid TTA method
-                tta_config = {}
-                for m in cfg.tta['params']:
-                    tta_config[m] = cfg.tta[m]
-                cfg.tta = OmegaConf.create(tta_config)
-
-                tta_stats = run_tta(factory, status['model'], datasets, cfg.tta)
+                tta_stats = run_tta(factory, status['model'], tta_datasets, cfg.tta)
                 stats = stats | tta_stats
 
         if cfg.wandb and dist.get_rank() == 0:

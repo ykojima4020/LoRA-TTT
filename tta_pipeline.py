@@ -46,7 +46,7 @@ def run_tta(factory, status, datasets, config):
     preprocess = transforms.Compose([
                 transforms.ToTensor(),
                 normalize])
-    batch_size = min([p.batch_size for n, p in config.items()])
+    batch_size = min([p.batch_size for n, p in config.items() if hasattr(p, 'batch_size')])
     logger.info(f"TTA Batch size: {batch_size}")
     tta_transform = AugMixAugmenter(base_transform, preprocess, n_views=batch_size-1,
                                     augmix=False)
@@ -136,7 +136,6 @@ def run_tta(factory, status, datasets, config):
 
         top1_after_tta, top5_after_tta = tta_runner(factory, status, tta_data,
                                                     prompts, classes)
-        time_stats = tta_runner.get_time()
 
         diff_top1 = top1_after_tta - top1_before_tta
         diff_top5 = top5_after_tta - top5_before_tta
@@ -167,6 +166,5 @@ def run_tta(factory, status, datasets, config):
                      'nor_top1': float(np.mean(nor_top1s)),
                      'nor_top5': float(np.mean(nor_top5s)),
                      'all': datasets_stats}}
-    stats.update(time_stats)
     return stats
 
