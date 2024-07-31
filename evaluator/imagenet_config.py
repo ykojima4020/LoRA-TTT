@@ -1,4 +1,6 @@
-imagenet_templates = [
+simple_prompts = ['a photo of a {}.']
+
+ensemble_prompts = [
     'a bad photo of a {}.',
     'a photo of many {}.',
     'a sculpture of a {}.',

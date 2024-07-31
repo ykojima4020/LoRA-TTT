@@ -34,14 +34,6 @@ def get_config(args):
     if args.opts is not None:
         cfg = OmegaConf.merge(cfg, OmegaConf.from_dotlist(args.opts))
 
-    if hasattr(args, 'batch_size') and args.batch_size:
-        cfg.data.batch_size = args.batch_size
-
-    if hasattr(args, 'output') and args.output:
-        cfg.output = args.output
-    else:
-        cfg.output = osp.join('./tmp', cfg.model_name)
-
     if hasattr(args, 'wandb') and args.wandb:
         cfg.wandb = args.wandb
 
@@ -51,13 +43,10 @@ def get_config(args):
     if hasattr(args, 'device') and args.device:
         cfg.device = args.device
 
-    if hasattr(args, 'epochs') and args.epochs:
-        cfg.train.epochs = args.epochs
+    if hasattr(args, 'finetune') and args.finetune:
+        cfg.finetune = args.finetune
 
-    if hasattr(args, 'type') and args.type:
-        cfg.type = args.type
-
-    if hasattr(args, 'reconst') and args.reconst:
-        cfg.reconst = args.reconst
+    if hasattr(args, 'checkpoint') and args.checkpoint:
+        cfg.checkpoint = args.checkpoint
 
     return cfg

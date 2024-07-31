@@ -1,0 +1,165 @@
+_base_: './default.yaml'
+
+data:
+  batch_size: 64
+  dataset:
+    meta:
+      imagenet:
+        type: img_classification
+        path: '/path/to/dataset'
+        classes: 'imagenet'
+        prompt: 'ensemble'
+      imagenet_a:
+        type: img_classification
+        path: '/path/to/dataset'
+        classes: 'imagenet_a'
+        prompt: 'ensemble'
+      imagenetv2:
+        type: img_classification
+        path: '/path/to/dataset'
+        classes: 'imagenet'
+        prompt: 'ensemble'
+      imagenet_r:
+        type: img_classification
+        path: '/path/to/dataset'
+        classes: 'imagenet_r'
+        prompt: 'ensemble'
+      imagenet_sketch:
+        type: img_classification
+        path: '/path/to/dataset'
+        classes: 'imagenet'
+        prompt: 'ensemble'
+
+      flower102:
+        type: img_classification
+        path: '/path/to/dataset'
+        label: '/path/to/label'
+        classes: 'flower102'
+        prompt: 'ensemble'
+      food101:
+        type: img_classification
+        path: '/path/to/dataset'
+        label: '/path/to/label'
+        classes: 'food101'
+        prompt: 'ensemble'
+      dtd:
+        type: img_classification
+        path: '/path/to/dataset'
+        label: '/path/to/label'
+        classes: 'dtd'
+        prompt: 'ensemble'
+      pets:
+        type: img_classification
+        path: '/path/to/dataset'
+        label: '/path/to/label'
+        classes: 'pets'
+        prompt: 'ensemble'
+      sun397:
+        type: img_classification
+        path: '/path/to/dataset'
+        label: '/path/to/label'
+        classes: 'sun397'
+        prompt: 'ensemble'
+      caltech101:
+        type: img_classification
+        path: '/path/to/dataset'
+        label: '/path/to/label'
+        classes: 'caltech101'
+        prompt: 'ensemble'
+      ucf101:
+        type: img_classification
+        path: '/path/to/dataset'
+        label: '/path/to/label'
+        classes: 'ucf101'
+        prompt: 'ensemble'
+      cars:
+        type: img_classification
+        path: '/path/to/dataset'
+        label: '/path/to/label'
+        classes: 'cars'
+        prompt: 'ensemble'
+      eurosat:
+        type: img_classification
+        path: '/path/to/dataset'
+        label: '/path/to/label'
+        classes: 'eurosat'
+        prompt: 'ensemble'
+      aircraft:
+        type: img_classification
+        path: '/path/to/dataset'
+        label: ''
+        classes: 'aircraft'
+        prompt: 'ensemble'
+ 
+    tta: ['imagenet', 'imagenet_a', 'imagenetv2', 'imagenet_r', 'imagenet_sketch']
+    train: ['gcc3m_005']
+
+model:
+  image:
+    encoder:
+      name: 'vit-b'
+      size: 224
+      patch_size: 16
+      embeddings: 768
+    decoder:
+      layer: 8
+      head: 16
+  mae:
+    mask_ratio: 0.75
+    reconst: 'feature'
+    decoder: true
+  loss:
+    alpha: 1
+  peft:
+    name: 'lora'
+    r: 32
+    alpha_r_scale: 2
+    target_modules: ["k_proj", "v_proj", "q_proj", "out_proj"]
+    dropout: 0.01
+    layers_to_transform: [0,1,2,3,4,5,6,7,8,9,10,11]
+
+train:
+  start_epoch: 0
+  epochs: 1
+  warmup_epochs: 2
+  lr: 1e-4
+  weight_decay: 0.05
+  warmup_lr: 1e-6
+  min_lr: 1e-7
+  clip_grad: 0.1
+
+  lr_scheduler:
+    name: cosine
+
+tta:
+  peft:
+    batch_size: 64
+    epochs: 1
+    optimizer: 'adam'
+    lr: 1e-3
+    weight_decay: 0.2
+    eps: 1e-8
+    betas: [0.9, 0.95]
+    loss: ['mae', 'mem']
+    mae:
+      weight: 1
+    mem:
+      weight: 1
+
+  tp:
+    lr: 5e-3
+    batch_size: 64
+    epochs: 1
+    loss: ['mem']
+    mem:
+      weight: 1
+
+  params: ['peft']
+  run_freq: 1
+
+world_size: 1
+
+wandb_project: 'test'
+output: './test'
+finetune: false
+checkpoint: false

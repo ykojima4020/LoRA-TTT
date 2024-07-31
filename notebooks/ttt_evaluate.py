@@ -26,7 +26,7 @@ sys.path.append('../')
 
 from factory import RILSMAECLIPFactory, PretrainedOpenCLIPFactory, \
                     PretrainedOpenCLIPDecoderFineTuneFactory, PretrainedOpenCLIPDecoderEncoderFineTuneFactory, \
-                    PretrainedHFOpenCLIPDecoderEncoderFineTuneFactory
+                    PretrainedHFOpenCLIPFactory
 from evaluator import imagenet_config
 from peft import LoraConfig, get_peft_model
 
@@ -34,7 +34,7 @@ from peft import LoraConfig, get_peft_model
 from misc.config import load_config
 from omegaconf import OmegaConf
 
-config = '../config/ttt_mae.yaml'
+config = '../config/default_local.yaml'
 cfg = load_config(config)
 OmegaConf.set_struct(cfg, True)
 
@@ -81,19 +81,13 @@ def get_score(model, zeroshot_weights, target_image, target, logit_scale=100):
 # ### Model loading here
 
 # %%
-# Feature Reconstruction, fine-tune Decoder and shallow 4 layers of Encoder
+# example
 model_path = '/home/ykojima/Desktop/clip/mae_clip/output/20240401_decoder_layer8_encoder_lora_finetune_pix_recon_hf_open_clip_cc3m_wd_0001_blr_1e5/checkpoint.pth'
 
-factory = PretrainedHFOpenCLIPDecoderEncoderFineTuneFactory(cfg.model, mae='pixel')
+factory = PretrainedHFOpenCLIPFactory(cfg.model, mae='pixel')
 model, tokenizer, transform = factory.create()
 
 # LoRA settings
-config = LoraConfig(r=2,
-                    target_modules=["k_proj", "v_proj", "q_proj", "out_proj"],
-                    lora_dropout=0.01,
-                    bias="none"
-                    )
-model = get_peft_model(model, config)
 model = model.to(device)
 
 status = torch.load(model_path, map_location="cuda")
@@ -102,19 +96,20 @@ model.load_state_dict(status['model'])
 # %%
 # parameters fixed
 for name, param in model.named_parameters():
-    # if ('decoder' in name):
-    #     param.requires_grad = True
+    if ('decoder' in name):
+        param.requires_grad = False
+    if ('text_model.encoder' in name):
+        param.requires_grad = False
     print(name, param.requires_grad)
 
 # %%
-severity = 5
-corruption = "shot_noise"
-# dataset = torchvision.datasets.ImageFolder(root=f'/home/ykojima/dataset/imagenetv2-c/original', transform=transform('valid'))
-dataset = torchvision.datasets.ImageFolder(root=f'/home/ykojima/dataset/imagenetv2-c/{corruption}/{severity}', transform=transform('valid'))
-data_loader = torch.utils.data.DataLoader(dataset, batch_size=32, num_workers=2, shuffle=False)
+zeroshot_weights = zeroshot_classifier(model.clip, imagenet_config.imagenet_classes, imagenet_config.imagenet_templates)
 
 # %%
-zeroshot_weights = zeroshot_classifier(model.clip, imagenet_config.imagenet_classes, imagenet_config.imagenet_templates)
+severity = 5
+corruption = "zoom_blur"
+dataset = torchvision.datasets.ImageFolder(root=f'/home/ykojima/dataset/imagenetv2-c/{corruption}/{severity}', transform=transform('valid'))
+data_loader = torch.utils.data.DataLoader(dataset, batch_size=32, num_workers=2, shuffle=False)
 
 # %%
 # target image
@@ -133,8 +128,6 @@ with torch.no_grad():
     mae_loss, reconstruction, mask = model.mae(target_image)
 
 initial_loss = mae_loss.item()
-
-# zeroshot_weights = zeroshot_classifier(model.clip, imagenet_config.imagenet_classes, imagenet_config.imagenet_templates)
 initial_score = get_score(model, zeroshot_weights, target_image, target)
 
 
@@ -176,6 +169,7 @@ for epoch in tqdm(range(0, 500)):
 result_df = pd.DataFrame({'epoch': epochs, 'loss': losses, 'score': scores})
 
 # %%
+# pd.set_option('display.max_rows', None)
 result_df
 
 # %%

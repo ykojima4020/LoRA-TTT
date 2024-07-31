@@ -25,12 +25,10 @@ severities = [1, 2, 3, 4, 5]
 
 dataset = ImageNetV2Dataset()
 
-root = Path('/home/ykojima/dataset/imagenetv2-c')
+root = Path('./path/to/ImageNetV2-C')
 
 for severity in severities:
     for corruption in corruptions_name:
-        # if corruption == 'fog' or corruption == 'frost' or corruption == 'glass_blur':
-        #     continue
         store_dir = root / corruption / str(severity)
         store_dir.mkdir(parents=True, exist_ok=True)
         print(store_dir)

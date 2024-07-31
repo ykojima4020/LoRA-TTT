@@ -3,7 +3,6 @@ data:
   pin_memory: true
   num_workers: 6
   shuffle_buffer: 10000
-  seed: ${train.seed}
   dataset:
     train_image_path: 'path'
     train_json: 'path'
@@ -11,14 +10,13 @@ data:
     val_json: 'path'
 
     meta:
-      gcc3m:
+      gcc3m_005:
         type: img_txt_pair
         path: 'path'
-        prefix: gcc-train-{000000..001242}.tar
-        length: 2248678
+        prefix: gcc-train-{000000..000436}.tar
+        length: 112810
 
-    train:
-      - gcc3m
+    train: ['gcc3m_005']
 
   img_aug:
   text_aug:
@@ -29,12 +27,11 @@ train:
   epochs: 50
   warmup_epochs: 2
   lr: null
-  base_lr: 1e-3
-  weight_decay: 0.05
+  base_lr: 1e-5
+  weight_decay: 0.001
   warmup_lr: 4e-6
   min_lr: 4e-5
   clip_grad: 0.1
-  seed: 0
 
   lr_scheduler:
     name: cosine
@@ -50,7 +47,13 @@ model:
     encoder:
       name: 'vit'
       size: 224
-      patch_size: 14
+      patch_size: 16
+      embeddings: 768
+      layer: 12
+      head: 12
+    decoder:
+      layer: 8
+      head: 16
       embeddings: 512
   text:
     encoder:
@@ -64,26 +67,24 @@ model:
     temperature: 1
   mae:
     mask_ratio: 0.75
+    reconst: 'feature'
+    decoder: true
   loss:
     alpha: 1
   peft:
     name: 'lora'
-    r: 2
-    alpha: 4
+    r: 32
+    alpha_r_scale: 2
     target_modules: ["k_proj", "v_proj", "q_proj", "out_proj"]
     dropout: 0.01
-
-checkpoint:
-  auto_resume: true
-  resume: ''
-  max_kept: -1
+    layers_to_transform: [0,1,2,3,4,5,6,7,8,9,10,11]
 
 model_name: '' # display name in the logger
 test: false
 output: './tmp'
-seed: 0
 wandb: false
 device: 'cuda'
 world_size: 1
-type: 'normal'
-reconst: 'feature'
+type: 'open'
+finetune: false
+checkpoint: false
