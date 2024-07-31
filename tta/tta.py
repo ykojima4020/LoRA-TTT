@@ -93,6 +93,8 @@ class LoRATTARunner():
         text_embeddings = zeroshot_weights(model.clip, tokenizer, classes, prompts, device)
 
         optimizer = build_tta_optimizer(model, self._config)
+        # setup automatic mixed-precision (Amp) loss scaling
+        scaler = torch.cuda.amp.GradScaler()
 
         tta_data_loader = torch.utils.data.DataLoader(
                     tta_dataset, batch_size=1, shuffle=False,
@@ -118,10 +120,14 @@ class LoRATTARunner():
             model.mae.load_state_dict(status)
             model.train()
             for j in range(self._config.epochs):
-                loss = self._loss(model, images, text_embeddings)
+                with torch.cuda.amp.autocast():
+                    loss = self._loss(model, images, text_embeddings)
                 optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
+                # compute gradient and do SGD step
+                scaler.scale(loss).backward()
+                # Unscales the gradients of optimizer's assigned params in-place
+                scaler.step(optimizer)
+                scaler.update()
 
             # [NOTE]: inference
             model.eval()
