@@ -17,7 +17,7 @@ from omegaconf import OmegaConf
 sys.path.append('../')
 from factory import PretrainedHFOpenCLIPFactory
 from data.dataloader_builder import CLIPDataLoaderBuilder, GCC3MDataLoaderBuilder
-from trainer.trainer import SimpleTrainer
+from trainer.trainer import SimpleTrainer, Loss
 from trainer.validater import SimpleValidater
 from evaluator.evaluator import ZeroShotEvaluator
 from evaluator.imagenet_config import simple_prompts, ensemble_prompts, imagenet_classes
@@ -134,6 +134,8 @@ def process(rank, world_size, cfg):
     lr_scheduler = build_scheduler(cfg.train, optimizer, len(train_loader))
 
     trainer = SimpleTrainer(train_loader, optimizer, lr_scheduler, cfg.train.clip_grad, rank)
+    loss = Loss(clip_weight=cfg.train.loss.clip_weight, mae_weight=cfg.train.loss.mae_weight)
+
     validater = SimpleValidater(val_loader, optimizer, rank)
     if dist.get_rank() == 0:
         # [NOTE]: Metrics is ImageNetV2 here.
@@ -147,7 +149,7 @@ def process(rank, world_size, cfg):
         tta_table = None
         logger.info(f"Epoch: {epoch + 1}")
         ddp_model.train()
-        train_stats = trainer(ddp_model, epoch)
+        train_stats = trainer(ddp_model, loss, epoch)
         stats = stats | train_stats
 
         ddp_model.eval()

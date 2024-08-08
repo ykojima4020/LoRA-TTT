@@ -130,6 +130,9 @@ train:
 
   lr_scheduler:
     name: cosine
+  loss:
+    clip_weight: 1
+    mae_weight: 1
 
 tta:
   peft:
