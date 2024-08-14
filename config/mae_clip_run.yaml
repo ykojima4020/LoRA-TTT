@@ -1,4 +1,4 @@
-_base_: './default_local.yaml'
+_base_: './default.yaml'
 
 data:
   batch_size: 64
@@ -101,30 +101,19 @@ model:
       size: 224
       patch_size: 16
       embeddings: 768
-      layer: 12
-      head: 12
     decoder:
       layer: 8
       head: 16
-      embeddings: 512
-  text:
-    encoder:
-      name: 'distilbert-base-uncased' 
-      pretrained: true
-      trainable: false
-      embeddings: 768
-  clip:
-    projection: 256
-    dropout: 0.1
-    temperature: 1
   mae:
     mask_ratio: 0.75
+    reconst: 'feature'
+    decoder: true
   loss:
     alpha: 1
   peft:
     name: 'lora'
     r: 32
-    alpha_r_scale: 2
+    alpha_r_scale: 16
     target_modules: ["k_proj", "v_proj", "q_proj", "out_proj"]
     dropout: 0.01
     layers_to_transform: [0,1,2,3,4,5,6,7,8,9,10,11]
@@ -144,18 +133,21 @@ train:
 
 tta:
   peft:
-    lr: 1e-3
-    weight_decay: 0.2
     batch_size: 64
     epochs: 1
     optimizer: 'adam'
+    lr: 1e-3
+    weight_decay: 0.2
+    eps: 1e-8
+    betas: [0.9, 0.95]
     loss: ['mae', 'mem']
+    adaptive: True
     mae:
       weight: 1
     mem:
       weight: 1
 
-  tpt:
+  tp:
     lr: 5e-3
     batch_size: 64
     epochs: 1
@@ -168,7 +160,7 @@ tta:
 
 world_size: 1
 
-reconst: 'feature'
-wandb_project: 'mae_clip_tta'
+wandb_project: 'test'
 output: './test'
 finetune: false
+checkpoint: false

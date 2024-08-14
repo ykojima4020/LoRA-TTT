@@ -11,7 +11,7 @@ from model.tpt import PromptLearner
 from evaluator.imagenet_config import imagenet_classes
 
 class TPTHFOpenCLIP(nn.Module):
-    def __init__(self, image_encoder=None, image_projector=None, text_encoder=None, text_projector=None, clip=None, temperature=0.07):
+    def __init__(self, image_encoder=None, image_projector=None, text_encoder=None, text_projector=None, clip=None):
         super().__init__()
         if not isinstance(clip, transformers.models.clip.modeling_clip.CLIPModel):
             raise TypeError
@@ -32,7 +32,6 @@ class TPTHFOpenCLIP(nn.Module):
         self.prompt_learner = PromptLearner(clip, classnames, batch_size,
                                             n_ctx, ctx_init, ctx_position, learned_cls)
 
-        self._temperature = temperature
         self.logit_scale = clip.logit_scale 
         self.cross_entropy = nn.CrossEntropyLoss()
 

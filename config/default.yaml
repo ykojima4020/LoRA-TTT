@@ -10,14 +10,13 @@ data:
     val_json: 'path'
 
     meta:
-      gcc3m:
+      gcc3m_005:
         type: img_txt_pair
         path: 'path'
-        prefix: gcc-train-{000000..001242}.tar
-        length: 2248678
+        prefix: gcc-train-{000000..000436}.tar
+        length: 112810
 
-    train:
-      - gcc3m_005
+    train: ['gcc3m_005']
 
   img_aug:
   text_aug:
@@ -68,11 +67,13 @@ model:
     temperature: 1
   mae:
     mask_ratio: 0.75
+    reconst: 'feature'
+    decoder: true
   loss:
     alpha: 1
   peft:
     name: 'lora'
-    r: 2
+    r: 32
     alpha_r_scale: 2
     target_modules: ["k_proj", "v_proj", "q_proj", "out_proj"]
     dropout: 0.01
@@ -85,6 +86,5 @@ wandb: false
 device: 'cuda'
 world_size: 1
 type: 'open'
-reconst: 'feature'
 finetune: false
 checkpoint: false

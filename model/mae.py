@@ -185,7 +185,7 @@ class PixelMAE(torch.nn.Module):
         loss = torch.mean((reconstruction - image) ** 2 * mask) / self.mask_ratio
         return loss, reconstruction, mask
 
-class FeatureMAE(torch.nn.Module):
+class FeatureEMAMAE(torch.nn.Module):
     def __init__(self, encoder, decoder, mask_ratio, decay=0.9999) -> None: 
         super().__init__()
 
@@ -209,3 +209,48 @@ class FeatureMAE(torch.nn.Module):
         loss = torch.mean((reconstruction - image_features) ** 2) / self.mask_ratio
         # [NOTE]: output image as dummy
         return loss, image, mask
+
+class FeatureMAE(torch.nn.Module):
+    def __init__(self, encoder, decoder, mask_ratio) -> None:
+        super().__init__()
+
+        self._shuffler = PatchShuffle(mask_ratio)
+        self.encoder = encoder
+        self.decoder = decoder
+        self.mask_ratio = mask_ratio
+
+    def forward(self, image):
+        # [NOTE]: extract class token features from EMA encoder
+        with torch.no_grad():
+            image_features = self.encoder(image)[0][0, :, :]
+
+        features, backward_indexes = self.encoder(image, self._shuffler)
+        reconstruction, mask = self.decoder(features,  backward_indexes)
+
+        loss = torch.mean((reconstruction - image_features) ** 2) / self.mask_ratio
+        # [NOTE]: output image as dummy
+        return loss, image, mask
+
+class FeatureMAEWithoutDecoder(torch.nn.Module):
+    def __init__(self, encoder, decoder, mask_ratio) -> None:
+        super().__init__()
+
+        if not isinstance(decoder, type(None)):
+            print(f'{type(decoder)} is not supported and should be None.')
+            raise TypeError
+        self._shuffler = PatchShuffle(mask_ratio)
+        self.encoder = encoder
+        self.decoder = torch.nn.Module()
+        self.mask_ratio = mask_ratio
+
+    def forward(self, image):
+        # [NOTE]: extract class token features from EMA encoder
+        with torch.no_grad():
+            image_features = self.encoder(image)[0][0, :, :]				# image_features is torch.Size([64, 768])
+
+        features, backward_indexes = self.encoder(image, self._shuffler)		# features.shape is torch.Size([50, 64, 768]) 
+        target_features = features[0, :, :]
+
+        loss = torch.mean((target_features - image_features) ** 2) / self.mask_ratio
+        # [NOTE]: output image as dummy
+        return loss, image, None

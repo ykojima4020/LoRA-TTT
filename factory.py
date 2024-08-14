@@ -7,7 +7,7 @@ from transformers import CLIPModel, CLIPProcessor
 
 from model.clip import CLIP
 from model.modules import TextEncoder, ProjectionHead
-from model.mae import ImageEncoder, MAEPixelDecoder, MAEFeatureDecoder, PixelMAE, FeatureMAE
+from model.mae import ImageEncoder, MAEPixelDecoder, MAEFeatureDecoder, PixelMAE, FeatureMAE, FeatureMAEWithoutDecoder
 from model.mae_clip import MAECLIP
 
 from model.models_rils import RILSMAEEncoder
@@ -32,19 +32,20 @@ class OriginalViTCLIPFactory(Factory):
 
     def __init__(self, cfg):
         # [NOTE]: the following parameters are set by a configuration file.
+        self._image_size = cfg.image.encoder.size
+        self._patch_size = cfg.image.encoder.patch_size
+        self._emb_dim = cfg.image.encoder.embeddings
+        self._encoder_layer = cfg.image.encoder.layer
+        self._encoder_head = cfg.image.encoder.head
         self._cfg = cfg
-        self._image_size = 224 
-        self._patch_size = 14
-        self._emb_dim = 512
-        self._encoder_layer = 12
-        self._encoder_head = 4 
  
     def create(self):
         image_encoder = ImageEncoder(self._image_size, self._patch_size, self._emb_dim, self._encoder_layer, self._encoder_head)
-        text_encoder = TextEncoder(self._cfg.text_encoder_name, pretrained=True, trainable=False)
-        image_projection = ProjectionHead(embedding_dim=self._cfg.image_embedding, projection_dim=self._cfg.projection_dim, dropout=self._cfg.dropout)
-        text_projection = ProjectionHead(embedding_dim=self._cfg.text_embedding, projection_dim=self._cfg.projection_dim, dropout=self._cfg.dropout)
-        return CLIP(image_encoder, text_encoder, image_projection, text_projection, self._cfg.temperature)
+        text_encoder = TextEncoder(self._cfg.text.encoder.name, pretrained=True, trainable=False)
+        image_projection = ProjectionHead(embedding_dim=self._cfg.image.encoder.embeddings, projection_dim=self._cfg.clip.projection, dropout=self._cfg.clip.dropout)
+        text_projection = ProjectionHead(embedding_dim=self._cfg.text.encoder.embeddings, projection_dim=self._cfg.clip.projection, dropout=self._cfg.clip.dropout)
+        model = CLIP(image_encoder, text_encoder, image_projection, text_projection, self._cfg.clip.temperature)
+        return model, None, None
 
 class RILSMAECLIPFactory(Factory):
 
@@ -85,6 +86,10 @@ class RILSMAECLIPFactory(Factory):
 
         model = MAECLIP(image_encoder, clip, mae, self._alpha)
 
+        # [NOTE]: all the trainable parameters are requires_grad = False.
+        for name, param in model.named_parameters():
+            param.requires_grad = False
+
         tokenizer = DistilBertTokenizer.from_pretrained(self._cfg.text.encoder.name)
         tokenizer = BertTokenizer(tokenizer)
 
@@ -106,8 +111,11 @@ class PretrainedOpenCLIPFactory(Factory):
         self._mask_ratio = cfg.mae.mask_ratio
         self._temperature = cfg.clip.temperature
 
-        # [TODO]: this parameter should be managed in the config.
-        self._mae = mae
+        self._mae_loss_type = cfg.mae.reconst
+        self._mae_decoder = cfg.mae.decoder
+
+        if 'peft' in cfg:
+            raise NotImplementedError(f'PEFT cannot be applied in {self.__class__.__name__}.')
 
     def create(self):
 
@@ -117,91 +125,41 @@ class PretrainedOpenCLIPFactory(Factory):
         image_projector = OpenCLIPImageProjector(open_clip_model)
         clip = OpenCLIP(image_encoder, image_projector, open_clip_model, self._temperature)
 
-        if self._mae == 'pixel': 
+        if self._mae_loss_type == 'pixel':
             image_decoder = MAEPixelDecoder(
                 image_size=self._image_size, patch_size=self._patch_size,
                 emb_dim=self._emb_dim, num_layer=self._decoder_layer,
                 num_head=self._decoder_head)
             mae = PixelMAE(image_encoder, image_decoder, self._mask_ratio)
-        elif self._mae == 'feature':
+        elif self._mae_loss_type == 'feature':
             image_decoder = MAEFeatureDecoder(
                 image_size=self._image_size, patch_size=self._patch_size,
                 emb_dim=self._emb_dim, num_layer=self._decoder_layer,
                 num_head=self._decoder_head)
-            mae = FeatureMAE(image_encoder, image_decoder, self._mask_ratio)
+            if self._mae_decoder:
+                mae = FeatureMAE(image_encoder, image_decoder, self._mask_ratio)
+            else:
+                mae = FeatureMAEWithoutDecoder(image_encoder, None, self._mask_ratio)
+            print(f"{type(mae).__name__} is created.")
         else:
-            raise TypeError(f'{self._mae} is invalid.')
+            raise TypeError(f'{self._mae_loss_type} is invalid.')
 
         # [NOTE]: creating model...
         model = MAECLIP(image_encoder, clip, mae, alpha=self._alpha)
+
+        # [NOTE]: all the trainable parameters are requires_grad = False.
+        for name, param in model.named_parameters():
+            param.requires_grad = False
+
         tokenizer = open_clip.get_tokenizer('ViT-B-16')
         tokenizer = OpenCLIPTokenizer(tokenizer)
         transform = get_open_clip_vitb16_transforms
 
         return model, tokenizer, transform
 
-class PretrainedOpenCLIPDecoderFineTuneFactory(Factory):
-    def __init__(self, cfg, mae='pixel'):
-        self._factory = PretrainedOpenCLIPFactory(cfg, mae)
-
-    def create(self, frozen_encoder_layers=7):
-        model, tokenizer, transform = self._factory.create()
-        # [NOTE]: all the weigths are frozen
-        for name, param in model.named_parameters():
-            param.requires_grad = False
-
-        for name, param in model.named_parameters():
-            if ('decoder' in name):
-                param.requires_grad = True
-
-        return model, tokenizer, transform
-
-class PretrainedOpenCLIPDecoderEncoderFineTuneFactory(Factory):
-    def __init__(self, cfg, mae='pixel'):
-        self._factory = PretrainedOpenCLIPFactory(cfg, mae)
-
-    def create(self, frozen_encoder_layers=7):
-        model, tokenizer, transform = self._factory.create()
-        # [NOTE]: all the weigths are frozen
-        for name, param in model.named_parameters():
-            param.requires_grad = False
-
-        # [TODO]: choose trainable parameters flexibly
-        for name, param in model.named_parameters():
-            if ('decoder' in name):
-                param.requires_grad = True
-            elif ('image_encoder' in name):
-                if ('ln_post' in name):
-                    param.requires_grad = True
-                elif ('transformer' in name):
-                    names = name.split('.')
-                    layer_number = int(names[3])
-                    if layer_number > frozen_encoder_layers:
-                        param.requires_grad = True
-                else:
-                    param.requires_grad = False
-
-        '''
-        for name, param in model.named_parameters():
-            if ('decoder' in name):
-                param.requires_grad = True
-            elif ('image_encoder' in name):
-                if ('ln_pre' in name):
-                    param.requires_grad = True
-                elif ('transformer' in name):
-                    names = name.split('.')
-                    layer_number = int(names[3])
-                    if layer_number < 4:
-                        param.requires_grad = True
-                else:
-                    param.requires_grad = False
-        '''
-
-        return model, tokenizer, transform
-
 
 class PretrainedHFOpenCLIPFactory(Factory):
-    def __init__(self, cfg, mae='pixel'):
+    def __init__(self, cfg, tpt=False):
         # [NOTE]: need to create a decoder
         self._image_size = cfg.image.encoder.size
         self._patch_size = cfg.image.encoder.patch_size
@@ -211,20 +169,26 @@ class PretrainedHFOpenCLIPFactory(Factory):
 
         self._alpha = cfg.loss.alpha
         self._mask_ratio = cfg.mae.mask_ratio
-        self._temperature = cfg.clip.temperature
 
-        # [TODO]: this parameter should be managed in the config.
-        self._mae = mae
+        self._mae_loss_type = cfg.mae.reconst
+        self._mae_decoder = cfg.mae.decoder
 
+        self._tpt = tpt
         self._peft = None
         if 'peft' in cfg:
             self._peft = cfg.peft
 
-    def create(self):
+    def create(self, tpt=False, clip_type='B'):
 
         # [NOTE]: I don't know what kinds of dataset are used in the model.
-        hf_open_clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch16")
-        processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch16")
+        if clip_type == 'B':
+            hf_open_clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch16")
+            processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch16")
+        elif clip_type == 'L':
+            hf_open_clip_model = CLIPModel.from_pretrained("openai/clip-vit-large-patch14")
+            processor = CLIPProcessor.from_pretrained("openai/clip-vit-large-patch14")
+        else:
+            raise NotImplementedError
 
         image_encoder = HFOpenCLIPImageEncoder(hf_open_clip_model.vision_model)
         image_projector = HFOpenCLIPImageProjector(hf_open_clip_model.visual_projection)
@@ -241,105 +205,39 @@ class PretrainedHFOpenCLIPFactory(Factory):
             # [NOTE]: Trainable LoRA scaling
             for name, module in image_encoder.named_modules():
                 if 'lora_B.default' in name:
-                    scaled_module = ScaledLinear(self._peft.r, 768)
+                    scaled_module = DynamicScaledLinear(self._peft.r, self._emb_dim)
                     parent_name = name.rsplit('.', 1)[0] if '.' in name else ''
                     setattr(dict(image_encoder.named_modules())[parent_name], name.rsplit('.', 1)[-1], scaled_module)
-
         else:
-            raise TypeError(f'{self._peft.name} is not supported.')
+            print(f'{self._peft.name} is not supported.')
 
-        clip = HFOpenCLIP(image_encoder, image_projector, hf_open_clip_model, self._temperature)
+        if self._tpt:
+            text_encoder = TPTTextEncoder(hf_open_clip_model.text_model, hf_open_clip_model.dtype)
+            # [NOTE]: ImageProjector is also used for TextProjector
+            text_projector = HFOpenCLIPImageProjector(hf_open_clip_model.text_projection)
+            clip = TPTHFOpenCLIP(image_encoder, image_projector, text_encoder, text_projector, hf_open_clip_model)
+        else:
+            clip = HFOpenCLIP(image_encoder, image_projector, hf_open_clip_model)
 
-        if self._mae == 'pixel':
+
+        if self._mae_loss_type == 'pixel':
             image_decoder = MAEPixelDecoder(
                 image_size=self._image_size, patch_size=self._patch_size,
                 emb_dim=self._emb_dim, num_layer=self._decoder_layer,
                 num_head=self._decoder_head)
             mae = PixelMAE(image_encoder, image_decoder, self._mask_ratio)
-        elif self._mae == 'feature':
+        elif self._mae_loss_type == 'feature':
             image_decoder = MAEFeatureDecoder(
                 image_size=self._image_size, patch_size=self._patch_size,
                 emb_dim=self._emb_dim, num_layer=self._decoder_layer,
                 num_head=self._decoder_head)
-            mae = FeatureMAE(image_encoder, image_decoder, self._mask_ratio)
+            if self._mae_decoder:
+                mae = FeatureMAE(image_encoder, image_decoder, self._mask_ratio)
+            else:
+                mae = FeatureMAEWithoutDecoder(image_encoder, None, self._mask_ratio)
+            print(f"{type(mae).__name__} is created.")
         else:
-            raise TypeError(f'{self._mae} is invalid.')
-
-        # [NOTE]: creating model...
-        model = MAECLIP(image_encoder, clip, mae, alpha=self._alpha)
-
-        # [NOTE]: all the trainable parameters are requires_grad = False.
-        for name, param in model.named_parameters():
-            param.requires_grad = False
-
-        tokenizer = processor.tokenizer
-        tokenizer = BertTokenizer(tokenizer)
-
-        # [TODO]: should be set transform designed for
-        transform = get_open_clip_vitb16_transforms
-        return model, tokenizer, transform
-
-# [TODO]: this factory shoud be integrated into PretrainedHFOpenCLIPFactory
-class PretrainedTPTHFOpenCLIPFactory(Factory):
-
-    def __init__(self, cfg, mae='pixel'):
-        # [NOTE]: need to create a decoder
-        self._image_size = cfg.image.encoder.size
-        self._patch_size = cfg.image.encoder.patch_size
-        self._emb_dim = cfg.image.encoder.embeddings
-        self._decoder_layer = cfg.image.decoder.layer
-        self._decoder_head = cfg.image.decoder.head
-
-        self._alpha = cfg.loss.alpha
-        self._mask_ratio = cfg.mae.mask_ratio
-        self._temperature = cfg.clip.temperature
-
-        # [TODO]: this parameter should be managed in the config.
-        self._mae = mae
-
-        self._peft = None
-        if 'peft' in cfg:
-            self._peft = cfg.peft
-
-    def create(self):
-
-        # [NOTE]: I don't know what kinds of dataset are used in the model.
-        hf_open_clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch16")
-        processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch16")
-
-        image_encoder = HFOpenCLIPImageEncoder(hf_open_clip_model.vision_model)
-        image_projector = HFOpenCLIPImageProjector(hf_open_clip_model.visual_projection)
-        text_encoder = TPTTextEncoder(hf_open_clip_model.text_model, hf_open_clip_model.dtype)
-        # [NOTE]: ImageProjector is also used for TextProjector
-        text_projector = HFOpenCLIPImageProjector(hf_open_clip_model.text_projection)
-
-        if self._peft.name == 'lora':
-            config = LoraConfig(r=self._peft.r,
-                                target_modules=self._peft.target_modules,
-                                lora_alpha=(self._peft.r * self._peft.alpha_r_scale),
-                                lora_dropout=self._peft.dropout,
-                                layers_to_transform=self._peft.layers_to_transform
-                               )
-            image_encoder = get_peft_model(image_encoder, config)
-        else:
-            raise TypeError(f'{self._peft.name} is not supported.')
-
-        clip = TPTHFOpenCLIP(image_encoder, image_projector, text_encoder, text_projector, hf_open_clip_model, self._temperature)
-
-        if self._mae == 'pixel':
-            image_decoder = MAEPixelDecoder(
-                image_size=self._image_size, patch_size=self._patch_size,
-                emb_dim=self._emb_dim, num_layer=self._decoder_layer,
-                num_head=self._decoder_head)
-            mae = PixelMAE(image_encoder, image_decoder, self._mask_ratio)
-        elif self._mae == 'feature':
-            image_decoder = MAEFeatureDecoder(
-                image_size=self._image_size, patch_size=self._patch_size,
-                emb_dim=self._emb_dim, num_layer=self._decoder_layer,
-                num_head=self._decoder_head)
-            mae = FeatureMAE(image_encoder, image_decoder, self._mask_ratio)
-        else:
-            raise TypeError(f'{self._mae} is invalid.')
+            raise TypeError(f'{self._mae_loss_type} is invalid.')
 
         # [NOTE]: creating model...
         model = MAECLIP(image_encoder, clip, mae, alpha=self._alpha)
@@ -380,3 +278,29 @@ class ScaledLinear(torch.nn.Linear):
         output = super(ScaledLinear, self).forward(input)
         # スケーリングパラメータで出力をスケーリング
         return output * torch.exp(self.scale)
+
+
+class DynamicScaledLinear(torch.nn.Linear):
+    def __init__(self, in_features, out_features, bias=False):
+        super(DynamicScaledLinear, self).__init__(in_features, out_features, bias)
+
+        self.scale = 1
+
+        # 重みとバイアスを0で初期化
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        # 重みを0で初期化
+        nn.init.constant_(self.weight, 0)
+        if self.bias is not None:
+            # バイアスも0で初期化
+            nn.init.constant_(self.bias, 0)
+
+    def set_scale(self, scale):
+        self.scale = scale
+
+    def forward(self, input):
+        # nn.Linear のフォワードパス
+        output = super(DynamicScaledLinear, self).forward(input)
+        # スケーリングパラメータで出力をスケーリング
+        return output * self.scale

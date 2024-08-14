@@ -6,8 +6,8 @@ import pathlib
 import random
 import shutil
 
-imanagent_path = pathlib.Path('/home/ykojima/dataset/imagenetv2-c/original/0')
-copy_path = pathlib.Path('/home/ykojima/dataset/imagenetv2-c/original_10/0')
+imanagent_path = pathlib.Path('/path/to/imagenet')
+copy_path = pathlib.Path('/path/to/subset')
 
 
 class_dirs = list(imanagent_path.iterdir())
@@ -19,6 +19,5 @@ for class_dir in class_dirs:
     files = list(class_dir.iterdir())
     selected_file = random.choice(files)
 
-    print(copy_dir)
     print(selected_file)
     shutil.copy(selected_file, copy_dir)
