@@ -39,7 +39,6 @@ class MEMLoss():
         loss = avg_entropy(output)
         return loss
 
-
 class MAELoss():
     def __init__(self):
         pass
@@ -67,11 +66,18 @@ class LoRATTARunner():
         print(config)
         self._config = config
 
+        # [NOTE]: When using MAELoss, due to specific implementation constraints,
+        #         enabling AMP prevents the loss from ebing differentiable.
+        #         https://discuss.pytorch.org/t/autocast-and-torch-no-grad-unexpected-behaviour/93475
+        self._amp = False
+
         if isinstance(loss, MEMLoss):
             self._loss = loss
+            self._amp = True
         elif isinstance(loss, MAELoss):
             self._loss = loss
         elif isinstance(loss, MAEMEMLoss):
+            self._amp = True
             self._loss = loss
         else:
             raise TypeError
@@ -94,7 +100,7 @@ class LoRATTARunner():
 
         optimizer = build_tta_optimizer(model, self._config)
         # setup automatic mixed-precision (Amp) loss scaling
-        scaler = torch.cuda.amp.GradScaler()
+        scaler = torch.amp.GradScaler()
 
         tta_data_loader = torch.utils.data.DataLoader(
                     tta_dataset, batch_size=1, shuffle=False,
@@ -120,7 +126,7 @@ class LoRATTARunner():
             model.mae.load_state_dict(status)
             model.train()
             for j in range(self._config.epochs):
-                with torch.cuda.amp.autocast():
+                with torch.amp.autocast(device_type='cuda', enabled=self._amp):
                     loss = self._loss(model, images, text_embeddings)
                 optimizer.zero_grad()
                 # compute gradient and do SGD step
@@ -132,7 +138,7 @@ class LoRATTARunner():
             # [NOTE]: inference
             model.eval()
             with torch.no_grad():
-                with torch.cuda.amp.autocast():
+                with torch.amp.autocast(device_type='cuda'):
                     image_features = model.clip.image_encode(image)
                     image_features /= image_features.norm(dim=-1, keepdim=True)
                     output = image_features @ text_embeddings
