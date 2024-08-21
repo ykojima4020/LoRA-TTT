@@ -175,11 +175,17 @@ class PretrainedHFOpenCLIPFactory(Factory):
         if 'peft' in cfg:
             self._peft = cfg.peft
 
-    def create(self, tpt=False):
+    def create(self, tpt=False, vit_type='B'):
 
         # [NOTE]: I don't know what kinds of dataset are used in the model.
-        hf_open_clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch16")
-        processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch16")
+        if vit_type == 'B':
+            hf_open_clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch16")
+            processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch16")
+        elif vit_type == 'L':
+            hf_open_clip_model = CLIPModel.from_pretrained("openai/clip-vit-large-patch14")
+            processor = CLIPProcessor.from_pretrained("openai/clip-vit-large-patch14")
+        else:
+            raise NotImplementedError
 
         image_encoder = HFOpenCLIPImageEncoder(hf_open_clip_model.vision_model)
         image_projector = HFOpenCLIPImageProjector(hf_open_clip_model.visual_projection)

@@ -9,7 +9,7 @@ data:
         path: '/path/to/dataset'
         classes: 'imagenet'
         prompt: 'ensemble'
-      imagenet_a:
+     imagenet_a:
         type: img_classification
         path: '/path/to/dataset'
         classes: 'imagenet_a'
@@ -90,7 +90,7 @@ data:
         label: ''
         classes: 'aircraft'
         prompt: 'ensemble'
- 
+
     tta: ['imagenet', 'imagenet_a', 'imagenetv2', 'imagenet_r', 'imagenet_sketch']
     train: ['gcc3m_005']
 
