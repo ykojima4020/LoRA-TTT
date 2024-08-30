@@ -94,3 +94,24 @@ def average_duplicate_rows(df, columns_to_group, column_to_average):
 
     return df
 
+
+def basic_formatter(runs_summary, metric):
+    p = ['name', 'model.peft.r', 'model.peft.target_modules', 'model.peft.alpha_r_scale',
+         'tta.peft.loss', *metric]
+    df = runs_summary[p]
+    print(f'number of total runs: {len(df)}')
+
+    # name to order
+    order_mapping = {'k_proj+v_proj+q_proj+out_proj': 'kvqo', 'v_proj+q_proj': 'vq', 'k_proj+q_proj': 'kq',
+                     'q_proj': 'q', 'v_proj': 'v'}
+    df['model.peft.target_modules'] = df['model.peft.target_modules'].map(order_mapping)
+    # order_mapping = {'kvqo': 1, 'vq': 2, 'q': 3}
+    # df['model.peft.target_modules'] = df['model.peft.target_modules'].map(order_mapping)
+
+    df[metric] = df[metric].astype(float)
+
+    df = df.sort_values(by=['model.peft.r', 'model.peft.target_modules'])
+    print(f'number of unique runs: {len(df)}')
+    return df
+
+
