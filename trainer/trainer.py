@@ -46,7 +46,7 @@ class SimpleTrainer(Trainer):
         self._lr_scheduler = lr_scheduler
         self._device = device
 
-        self._scaler = torch.cuda.amp.GradScaler()
+        self._scaler = torch.GradScaler()
         self._grad_norm = grad_norm
 
     def _reset(self):
