@@ -39,11 +39,7 @@ class MEMLoss():
             output = model.clip.logit_scale.exp() * (image_features @ text_embeddings)
         loss_output, _ = select_confident_samples(output, self._selection_p)
         loss = avg_entropy(loss_output)
-        with torch.no_grad():
-            uncertain_output, _ = select_confident_samples(output, 1.0)
-            uncertainty = avg_entropy(uncertain_output)
-        return loss, uncertainty
-
+        return loss
 
 class MAELoss():
     def __init__(self):
@@ -72,11 +68,18 @@ class LoRATTARunner():
         print(config)
         self._config = config
 
+        # [NOTE]: When using MAELoss, due to specific implementation constraints,
+        #         enabling AMP prevents the loss from ebing differentiable.
+        #         https://discuss.pytorch.org/t/autocast-and-torch-no-grad-unexpected-behaviour/93475
+        self._amp = False
+
         if isinstance(loss, MEMLoss):
             self._loss = loss
+            self._amp = True
         elif isinstance(loss, MAELoss):
             self._loss = loss
         elif isinstance(loss, MAEMEMLoss):
+            self._amp = True
             self._loss = loss
         else:
             raise TypeError
@@ -125,8 +128,8 @@ class LoRATTARunner():
             model.mae.load_state_dict(status)
             model.train()
             for j in range(self._config.epochs):
-                with torch.amp.autocast(device_type='cuda'):
-                    loss, uncertainty = self._loss(model, images, text_embeddings)
+                with torch.amp.autocast(device_type='cuda', enabled=self._amp):
+                    loss = self._loss(model, images, text_embeddings)
                 optimizer.zero_grad()
                 # compute gradient and do SGD step
                 scaler.scale(loss).backward()

@@ -9,7 +9,7 @@ data:
         path: '/path/to/dataset'
         classes: 'imagenet'
         prompt: 'ensemble'
-      imagenet_a:
+     imagenet_a:
         type: img_classification
         path: '/path/to/dataset'
         classes: 'imagenet_a'
@@ -90,7 +90,7 @@ data:
         label: ''
         classes: 'aircraft'
         prompt: 'ensemble'
- 
+
     tta: ['imagenet', 'imagenet_a', 'imagenetv2', 'imagenet_r', 'imagenet_sketch']
     train: ['gcc3m_005']
 
@@ -107,7 +107,7 @@ model:
   mae:
     mask_ratio: 0.75
     reconst: 'feature'
-    decoder: true
+    decoder: false
   loss:
     alpha: 1
   peft:
@@ -141,7 +141,7 @@ tta:
     eps: 1e-8
     betas: [0.9, 0.95]
     loss: ['mae', 'mem']
-    adaptive: True
+    adaptive: false
     mae:
       weight: 1
     mem:
