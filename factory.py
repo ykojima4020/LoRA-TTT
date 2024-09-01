@@ -1,3 +1,6 @@
+import torch
+import torch.nn as nn
+
 import open_clip
 from transformers import DistilBertTokenizer
 from transformers import CLIPModel, CLIPProcessor
@@ -175,13 +178,13 @@ class PretrainedHFOpenCLIPFactory(Factory):
         if 'peft' in cfg:
             self._peft = cfg.peft
 
-    def create(self, tpt=False, vit_type='B'):
+    def create(self, tpt=False, clip_type='B'):
 
         # [NOTE]: I don't know what kinds of dataset are used in the model.
-        if vit_type == 'B':
+        if clip_type == 'B':
             hf_open_clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch16")
             processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch16")
-        elif vit_type == 'L':
+        elif clip_type == 'L':
             hf_open_clip_model = CLIPModel.from_pretrained("openai/clip-vit-large-patch14")
             processor = CLIPProcessor.from_pretrained("openai/clip-vit-large-patch14")
         else:
@@ -198,8 +201,15 @@ class PretrainedHFOpenCLIPFactory(Factory):
                                 layers_to_transform=self._peft.layers_to_transform
                                )
             image_encoder = get_peft_model(image_encoder, config)
+
+            # [NOTE]: Trainable LoRA scaling
+            for name, module in image_encoder.named_modules():
+                if 'lora_B.default' in name:
+                    scaled_module = DynamicScaledLinear(self._peft.r, self._emb_dim)
+                    parent_name = name.rsplit('.', 1)[0] if '.' in name else ''
+                    setattr(dict(image_encoder.named_modules())[parent_name], name.rsplit('.', 1)[-1], scaled_module)
         else:
-            raise TypeError(f'{self._peft.name} is not supported.')
+            print(f'{self._peft.name} is not supported.')
 
         if self._tpt:
             text_encoder = TPTTextEncoder(hf_open_clip_model.text_model, hf_open_clip_model.dtype)
@@ -243,3 +253,54 @@ class PretrainedHFOpenCLIPFactory(Factory):
         transform = get_open_clip_vitb16_transforms
         return model, tokenizer, transform
 
+
+class ScaledLinear(torch.nn.Linear):
+    def __init__(self, in_features, out_features, bias=False):
+        super(ScaledLinear, self).__init__(in_features, out_features, bias)
+        # 学習可能なスケーリングパラメータを初期化
+        self.scale = nn.Parameter(torch.zeros(1))
+        min_value = -2
+        max_value = 2
+        self.scale.data.clamp_(min_value, max_value)
+
+        # 重みとバイアスを0で初期化
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        # 重みを0で初期化
+        nn.init.constant_(self.weight, 0)
+        if self.bias is not None:
+            # バイアスも0で初期化
+            nn.init.constant_(self.bias, 0)
+
+    def forward(self, input):
+        # nn.Linear のフォワードパス
+        output = super(ScaledLinear, self).forward(input)
+        # スケーリングパラメータで出力をスケーリング
+        return output * torch.exp(self.scale)
+
+
+class DynamicScaledLinear(torch.nn.Linear):
+    def __init__(self, in_features, out_features, bias=False):
+        super(DynamicScaledLinear, self).__init__(in_features, out_features, bias)
+
+        self.scale = 1
+
+        # 重みとバイアスを0で初期化
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        # 重みを0で初期化
+        nn.init.constant_(self.weight, 0)
+        if self.bias is not None:
+            # バイアスも0で初期化
+            nn.init.constant_(self.bias, 0)
+
+    def set_scale(self, scale):
+        self.scale = scale
+
+    def forward(self, input):
+        # nn.Linear のフォワードパス
+        output = super(DynamicScaledLinear, self).forward(input)
+        # スケーリングパラメータで出力をスケーリング
+        return output * self.scale

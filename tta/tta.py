@@ -10,6 +10,8 @@ from copy import deepcopy
 from tqdm import tqdm
 from misc.utils import AvgMeter, Summary, AverageMeter, ProgressMeter
 
+from pathlib import Path
+
 def build_tta_optimizer(model, config):
     #[NOTE]: all the trainable parameters is in an image encoder
     if config.optimizer == 'adam':
@@ -24,8 +26,8 @@ def build_tta_optimizer(model, config):
     return optimizer
 
 class MEMLoss():
-    def __init__(self, tpt=False):
-        self._selection_p = 0.1
+    def __init__(self, tpt=False, selection_p=0.1):
+        self._selection_p = selection_p
         self._tpt = tpt
 
     def __call__(self, model, images, text_embeddings):
@@ -35,8 +37,8 @@ class MEMLoss():
             image_features = model.clip.image_encode(images)
             image_features = image_features / image_features.norm(dim=-1, keepdim=True)
             output = model.clip.logit_scale.exp() * (image_features @ text_embeddings)
-        output, _ = select_confident_samples(output, self._selection_p)
-        loss = avg_entropy(output)
+        loss_output, _ = select_confident_samples(output, self._selection_p)
+        loss = avg_entropy(loss_output)
         return loss
 
 class MAELoss():
@@ -135,6 +137,9 @@ class LoRATTARunner():
                 scaler.step(optimizer)
                 scaler.update()
 
+            if self._config.adaptive:
+                set_scale(model.image_encoder, loss.item())
+
             # [NOTE]: inference
             model.eval()
             with torch.no_grad():
@@ -227,7 +232,6 @@ class TextPromptTTARunner():
             with torch.no_grad():
                 with torch.cuda.amp.autocast():
                     output = model.clip(image)
-
             # measure accuracy and record loss
             acc1, acc5 = accuracy(output, target, topk=(1, 5))
             top1.update(acc1[0], image.size(0))
@@ -237,6 +241,123 @@ class TextPromptTTARunner():
                 progress.display(i)
 
         return top1.avg.item(), top5.avg.item()
+
+
+class LoRATTAAnalyser():
+
+    def __init__(self, config, dataset, loss=False):
+        print(f'{self} created.')
+        print(config)
+        self._config = config
+
+        self.mem_loss = MEMLoss()
+        self.mae_loss = MAELoss()
+
+        self.file_path = Path(f'{dataset}.txt')
+        if not self.file_path.exists():
+            self.file_path.touch()
+        else:
+            raise NotImplementedError('File already exists. No new file created.')
+
+    def __call__(self, factory, status,
+                 tta_dataset, prompts, classes,
+                 num_workers=4, pin_memory=True, device='cuda'):
+        model, tokenizer, _ = factory.create()
+        model = model.to(device)
+
+        # [NOTE]: trainable parameters
+        for name, param in model.image_encoder.named_parameters():
+            if 'lora' in name:
+                param.requires_grad = True
+
+        for name, param in model.named_parameters():
+            print(f'{name}: {param.requires_grad}')
+
+        text_embeddings = zeroshot_weights(model.clip, tokenizer, classes, prompts, device)
+
+        optimizer = build_tta_optimizer(model, self._config)
+        # setup automatic mixed-precision (Amp) loss scaling
+        scaler = torch.cuda.amp.GradScaler()
+
+        tta_data_loader = torch.utils.data.DataLoader(
+                    tta_dataset, batch_size=1, shuffle=False,
+                    num_workers=num_workers, pin_memory=pin_memory)
+
+        top1 = AverageMeter('Acc@1', ':6.2f', Summary.AVERAGE)
+        top5 = AverageMeter('Acc@5', ':6.2f', Summary.AVERAGE)
+
+        progress = ProgressMeter(
+            len(tta_data_loader),
+            [top1, top5],
+            prefix='Test: ')
+
+
+        for i, (images, target) in tqdm(enumerate(tta_data_loader)):
+
+            for k in range(len(images)):
+                images[k] = images[k].to(device)
+            target = target.to(device)
+            image = images[0]
+            images = torch.cat(images, dim=0)
+
+            # [TODO]: should load only LoRA and Decoder, not update text_encoder
+            model.mae.load_state_dict(status)
+
+            # [NOTE]: inference
+            model.eval()
+            with torch.no_grad():
+                with torch.cuda.amp.autocast():
+                    image_features = model.clip.image_encode(image)
+                    image_features /= image_features.norm(dim=-1, keepdim=True)
+                    output = image_features @ text_embeddings
+                    scores = (100 * output).softmax(dim=-1) # logit_scale.exp() is 100
+                    socore_before_tta = scores[0][target[0]]
+
+            # measure accuracy and record loss
+            acc1, acc5 = accuracy(output, target, topk=(1, 5))
+            res_before_tta = True if acc1 == 100.0 else False
+
+            model.train()
+            for j in range(self._config.epochs):
+                with torch.cuda.amp.autocast():
+                    mem_loss = self.mem_loss(model, images, text_embeddings)
+                    with torch.no_grad():
+                        mae_loss = self.mae_loss(model, images, text_embeddings)
+                optimizer.zero_grad()
+                # compute gradient and do SGD step
+                scaler.scale(mem_loss).backward()
+                # Unscales the gradients of optimizer's assigned params in-place
+                scaler.step(optimizer)
+                scaler.update()
+
+            set_scale(model.image_encoder, mem_loss.item())
+
+            # [NOTE]: inference
+            model.eval()
+            with torch.no_grad():
+                with torch.cuda.amp.autocast():
+                    image_features = model.clip.image_encode(image)
+                    image_features /= image_features.norm(dim=-1, keepdim=True)
+                    output = image_features @ text_embeddings
+                    scores = (100 * output).softmax(dim=-1) # logit_scale.exp() is 100
+                    socore_after_tta = scores[0][target[0]]
+
+            # measure accuracy and record loss
+            acc1, acc5 = accuracy(output, target, topk=(1, 5))
+            res_after_tta = True if acc1 == 100.0 else False
+
+            top1.update(acc1[0], image.size(0))
+            top5.update(acc5[0], image.size(0))
+
+            if (i+1) % 200 == 0:
+                progress.display(i)
+
+            with open(self.file_path, 'a') as f:
+                f.write(f'{mem_loss.item()} {mae_loss.item()} {res_before_tta} {res_after_tta} {socore_before_tta.item()} {socore_after_tta.item()}\n')
+
+        return top1.avg.item(), top5.avg.item()
+
+
 
 
 def test_time_tuning(clip, inputs, optimizer, scaler, config):
@@ -315,3 +436,9 @@ def zeroshot_weights(model, tokenizer, classnames, templates, device):
         zeroshot_weights = torch.stack(zeroshot_weights, dim=1).cuda()
     return zeroshot_weights
 
+
+def set_scale(model, scale):
+    # scale = min(scale, 1)
+    for name, module in model.named_modules():
+        if 'lora_B.default' in name:
+            module.set_scale(scale)
