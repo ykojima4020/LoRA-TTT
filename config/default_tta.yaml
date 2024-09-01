@@ -9,7 +9,7 @@ data:
         path: '/path/to/dataset'
         classes: 'imagenet'
         prompt: 'ensemble'
-     imagenet_a:
+      imagenet_a:
         type: img_classification
         path: '/path/to/dataset'
         classes: 'imagenet_a'
@@ -130,6 +130,9 @@ train:
 
   lr_scheduler:
     name: cosine
+  loss:
+    clip_weight: 1
+    mae_weight: 1
 
 tta:
   peft:

@@ -101,8 +101,9 @@ class LoRATTARunner():
         text_embeddings = zeroshot_weights(model.clip, tokenizer, classes, prompts, device)
 
         optimizer = build_tta_optimizer(model, self._config)
+
         # setup automatic mixed-precision (Amp) loss scaling
-        scaler = torch.amp.GradScaler()
+        scaler = torch.GradScaler()
 
         tta_data_loader = torch.utils.data.DataLoader(
                     tta_dataset, batch_size=1, shuffle=False,
@@ -128,7 +129,7 @@ class LoRATTARunner():
             model.mae.load_state_dict(status)
             model.train()
             for j in range(self._config.epochs):
-                with torch.amp.autocast(device_type='cuda', enabled=self._amp):
+                with torch.autocast(device_type='cuda', enabled=self._amp):
                     loss = self._loss(model, images, text_embeddings)
                 optimizer.zero_grad()
                 # compute gradient and do SGD step
@@ -143,7 +144,7 @@ class LoRATTARunner():
             # [NOTE]: inference
             model.eval()
             with torch.no_grad():
-                with torch.amp.autocast(device_type='cuda'):
+                with torch.autocast(device_type='cuda'):
                     image_features = model.clip.image_encode(image)
                     image_features /= image_features.norm(dim=-1, keepdim=True)
                     output = image_features @ text_embeddings
@@ -230,7 +231,7 @@ class TextPromptTTARunner():
             # [NOTE]: inference
             model.eval()
             with torch.no_grad():
-                with torch.cuda.amp.autocast():
+                with torch.autocast():
                     output = model.clip(image)
             # measure accuracy and record loss
             acc1, acc5 = accuracy(output, target, topk=(1, 5))
@@ -277,7 +278,7 @@ class LoRATTAAnalyser():
 
         optimizer = build_tta_optimizer(model, self._config)
         # setup automatic mixed-precision (Amp) loss scaling
-        scaler = torch.cuda.amp.GradScaler()
+        scaler = torch.GradScaler()
 
         tta_data_loader = torch.utils.data.DataLoader(
                     tta_dataset, batch_size=1, shuffle=False,
@@ -306,7 +307,7 @@ class LoRATTAAnalyser():
             # [NOTE]: inference
             model.eval()
             with torch.no_grad():
-                with torch.cuda.amp.autocast():
+                with torch.autocast():
                     image_features = model.clip.image_encode(image)
                     image_features /= image_features.norm(dim=-1, keepdim=True)
                     output = image_features @ text_embeddings
@@ -319,7 +320,7 @@ class LoRATTAAnalyser():
 
             model.train()
             for j in range(self._config.epochs):
-                with torch.cuda.amp.autocast():
+                with torch.autocast():
                     mem_loss = self.mem_loss(model, images, text_embeddings)
                     with torch.no_grad():
                         mae_loss = self.mae_loss(model, images, text_embeddings)
@@ -335,7 +336,7 @@ class LoRATTAAnalyser():
             # [NOTE]: inference
             model.eval()
             with torch.no_grad():
-                with torch.cuda.amp.autocast():
+                with torch.autocast():
                     image_features = model.clip.image_encode(image)
                     image_features /= image_features.norm(dim=-1, keepdim=True)
                     output = image_features @ text_embeddings
@@ -367,7 +368,7 @@ def test_time_tuning(clip, inputs, optimizer, scaler, config):
 
     selected_idx = None
     for j in range(config.epochs):
-        with torch.cuda.amp.autocast():
+        with torch.autocast():
             clip = clip.to('cuda')
             output = clip(inputs)
 
