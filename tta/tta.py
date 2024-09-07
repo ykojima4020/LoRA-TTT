@@ -61,9 +61,10 @@ class MAEMEMLoss():
         mae_loss = self._mae_loss(model, images, text_embeddings)
         return (self._memw * mem_loss) + (self._maew * mae_loss)
 
-class LoRATTARunner():
 
-    def __init__(self, config, loss):
+class ImageEncoderTTARunner():
+
+    def __init__(self, config, loss, lora=True):
         print(f'{self} created.')
         print(config)
         self._config = config
@@ -84,6 +85,8 @@ class LoRATTARunner():
         else:
             raise TypeError
 
+        self._lora = lora
+
     def __call__(self, factory, status,
                  tta_dataset, prompts, classes,
                  num_workers=4, pin_memory=True, device='cuda'):
@@ -91,12 +94,23 @@ class LoRATTARunner():
         model = model.to(device)
 
         # [NOTE]: trainable parameters
-        for name, param in model.image_encoder.named_parameters():
-            if 'lora' in name:
-                param.requires_grad = True
+        if self._lora:
+            for name, param in model.image_encoder.named_parameters():
+                if 'lora' in name:
+                    param.requires_grad = True
+
+        else: # [NOTE]: Image Encoder Tuning
+            for i, layer in enumerate(model.image_encoder.base_model.model.transformer.layers):
+                if i in self._config.layers:
+                    for name, param in layer.named_parameters():
+                        if not 'lora' in name:
+                            if 'self_attn' in name:
+                                param.requires_grad = True
 
         for name, param in model.named_parameters():
             print(f'{name}: {param.requires_grad}')
+        trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        print(f'Trainable parameters: {trainable_params}')
 
         text_embeddings = zeroshot_weights(model.clip, tokenizer, classes, prompts, device)
 
@@ -231,7 +245,7 @@ class TextPromptTTARunner():
             # [NOTE]: inference
             model.eval()
             with torch.no_grad():
-                with torch.autocast():
+                with torch.autocast(device_type='cuda'):
                     output = model.clip(image)
             # measure accuracy and record loss
             acc1, acc5 = accuracy(output, target, topk=(1, 5))

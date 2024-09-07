@@ -17,7 +17,7 @@ sys.path.append('../')
 from evaluator.evaluator import ZeroShotEvaluator
 from evaluator.imagenet_config import simple_prompts, ensemble_prompts, imagenet_classes
 from evaluator.imagenet_variant_config import imagenet_a_classes, imagenet_r_classes
-from tta import LoRATTARunner, TextPromptTTARunner, MAELoss, MEMLoss, MAEMEMLoss
+from tta import TextPromptTTARunner, ImageEncoderTTARunner, MAELoss, MEMLoss, MAEMEMLoss
 
 from misc.tpt_transforms import AugMixAugmenter
 from misc.logger import get_logger
@@ -77,9 +77,9 @@ def run_tta(factory, status, datasets, config):
             classes = [cls.replace('_', ' ') for cls in classes]
 
 
-        if ('peft' in config.keys()) and ('tp' in config.keys()):
+        if all(param in ['tp', 'peft', 'ie'] for param in config.keys()):
             raise NotImplementedError
-        elif not ('peft' in config.keys()) and ('tp' in config.keys()):
+        elif any(param in ['tp'] for param in config.keys()):
             loss = config['tp']['loss']
             if ('mem' in loss) and not ('mae' in loss):
                 # [NOTE]: MEM for updating LoRA
@@ -89,7 +89,7 @@ def run_tta(factory, status, datasets, config):
             # [NOTE]: Choose Loss for Text Prompt here.
             tta_runner = TextPromptTTARunner(config['tp'], loss)
 
-        elif ('peft' in config.keys()) and not ('tp' in config.keys()):
+        elif any(param in ['peft'] for param in config.keys()):
             # [NOTE]: Choose Loss for PEFT here.
             loss = config['peft']['loss']
             if ('mem' in loss) and not ('mae' in loss):
@@ -104,7 +104,24 @@ def run_tta(factory, status, datasets, config):
                                   config['peft']['mem']['weight'])
             else:
                 raise NotImplementedError
-            tta_runner = LoRATTARunner(config['peft'], loss)
+            tta_runner = ImageEncoderTTARunner(config['peft'], loss, lora=True)
+
+        elif any(param in ['ie'] for param in config.keys()):
+            # [NOTE]: Choose Loss for PEFT here.
+            loss = config['ie']['loss']
+            if ('mem' in loss) and not ('mae' in loss):
+                # [NOTE]: MEM for updating LoRA
+                loss = MEMLoss()
+            elif not ('mem' in loss) and ('mae' in loss):
+                # [NOTE]: MAE for updating LoRA
+                loss = MAELoss()
+            elif ('mem' in loss) and ('mae' in loss):
+                # [NOTE]: MAE + MEM for updating LoRA
+                loss = MAEMEMLoss(config['ie']['mae']['weight'],
+                                  config['ie']['mem']['weight'])
+            else:
+                raise NotImplementedError
+            tta_runner = ImageEncoderTTARunner(config['ie'], loss, lora=False)
         else:
             raise TypeError
 
