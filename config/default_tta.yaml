@@ -8,88 +8,88 @@ data:
         type: img_classification
         path: '/path/to/dataset'
         classes: 'imagenet'
-        prompt: 'ensemble'
+        prompt: 'simple'
       imagenet_a:
         type: img_classification
         path: '/path/to/dataset'
         classes: 'imagenet_a'
-        prompt: 'ensemble'
+        prompt: 'simple'
       imagenetv2:
         type: img_classification
         path: '/path/to/dataset'
         classes: 'imagenet'
-        prompt: 'ensemble'
+        prompt: 'simple'
       imagenet_r:
         type: img_classification
         path: '/path/to/dataset'
         classes: 'imagenet_r'
-        prompt: 'ensemble'
+        prompt: 'simple'
       imagenet_sketch:
         type: img_classification
         path: '/path/to/dataset'
         classes: 'imagenet'
-        prompt: 'ensemble'
+        prompt: 'simple'
 
       flower102:
         type: img_classification
         path: '/path/to/dataset'
         label: '/path/to/label'
         classes: 'flower102'
-        prompt: 'ensemble'
+        prompt: 'simple'
       food101:
         type: img_classification
         path: '/path/to/dataset'
         label: '/path/to/label'
         classes: 'food101'
-        prompt: 'ensemble'
+        prompt: 'simple'
       dtd:
         type: img_classification
         path: '/path/to/dataset'
         label: '/path/to/label'
         classes: 'dtd'
-        prompt: 'ensemble'
+        prompt: 'simple'
       pets:
         type: img_classification
         path: '/path/to/dataset'
         label: '/path/to/label'
         classes: 'pets'
-        prompt: 'ensemble'
+        prompt: 'simple'
       sun397:
         type: img_classification
         path: '/path/to/dataset'
         label: '/path/to/label'
         classes: 'sun397'
-        prompt: 'ensemble'
+        prompt: 'simple'
       caltech101:
         type: img_classification
         path: '/path/to/dataset'
         label: '/path/to/label'
         classes: 'caltech101'
-        prompt: 'ensemble'
+        prompt: 'simple'
       ucf101:
         type: img_classification
         path: '/path/to/dataset'
         label: '/path/to/label'
         classes: 'ucf101'
-        prompt: 'ensemble'
+        prompt: 'simple'
       cars:
         type: img_classification
         path: '/path/to/dataset'
         label: '/path/to/label'
         classes: 'cars'
-        prompt: 'ensemble'
+        prompt: 'simple'
       eurosat:
         type: img_classification
         path: '/path/to/dataset'
         label: '/path/to/label'
         classes: 'eurosat'
-        prompt: 'ensemble'
+        prompt: 'simple'
       aircraft:
         type: img_classification
         path: '/path/to/dataset'
         label: ''
         classes: 'aircraft'
-        prompt: 'ensemble'
+        prompt: 'simple'
 
     tta: ['imagenet', 'imagenet_a', 'imagenetv2', 'imagenet_r', 'imagenet_sketch']
     train: ['gcc3m_005']
@@ -116,7 +116,7 @@ model:
     alpha_r_scale: 16
     target_modules: ["k_proj", "v_proj", "q_proj", "out_proj"]
     dropout: 0.01
-    layers_to_transform: [0,1,2,3,4,5,6,7,8,9,10,11]
+    layers_to_transform: [8,9,10,11]
 
 train:
   start_epoch: 0
@@ -142,8 +142,27 @@ tta:
     lr: 1e-3
     weight_decay: 0.2
     eps: 1e-8
-    betas: [0.9, 0.95]
-    loss: ['mae', 'mem']
+    # betas: [0.9, 0.95]
+    betas: [0.9, 0.999] # default
+    loss: ['mem']
+    reset: true
+    adaptive: false
+    mae:
+      weight: 1
+    mem:
+      weight: 1
+
+  ie:
+    batch_size: 64
+    epochs: 1
+    optimizer: 'adam'
+    lr: 1e-3
+    weight_decay: 0.2
+    eps: 1e-8
+    betas: [0.9, 0.999] # default
+    loss: ['mem']
+    layers: [11]
+    reset: true
     adaptive: false
     mae:
       weight: 1
@@ -151,10 +170,16 @@ tta:
       weight: 1
 
   tp:
-    lr: 5e-3
     batch_size: 64
     epochs: 1
+    optimizer: 'adam'
+    lr: 5e-3
+    weight_decay: 0.01  # default
+    eps: 1e-8           # default
+    betas: [0.9, 0.999] # default
     loss: ['mem']
+    reset: true
+    adaptive: false
     mem:
       weight: 1
 
