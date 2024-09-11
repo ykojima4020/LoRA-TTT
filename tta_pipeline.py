@@ -17,7 +17,7 @@ sys.path.append('../')
 from evaluator.evaluator import ZeroShotEvaluator
 from evaluator.imagenet_config import simple_prompts, ensemble_prompts, imagenet_classes
 from evaluator.imagenet_variant_config import imagenet_a_classes, imagenet_r_classes
-from tta import TextPromptTTARunner, ImageEncoderTTARunner, MAELoss, MEMLoss, MAEMEMLoss
+from tta import TTARunner, MAELoss, MEMLoss, MAEMEMLoss
 
 from misc.tpt_transforms import AugMixAugmenter
 from misc.logger import get_logger
@@ -87,7 +87,7 @@ def run_tta(factory, status, datasets, config):
             else:
                 raise NotImplementedError
             # [NOTE]: Choose Loss for Text Prompt here.
-            tta_runner = TextPromptTTARunner(config['tp'], loss)
+            tta_runner = TTARunner(config['tp'], loss, tp=True)
 
         elif any(param in ['peft'] for param in config.keys()):
             # [NOTE]: Choose Loss for PEFT here.
@@ -104,7 +104,7 @@ def run_tta(factory, status, datasets, config):
                                   config['peft']['mem']['weight'])
             else:
                 raise NotImplementedError
-            tta_runner = ImageEncoderTTARunner(config['peft'], loss, lora=True)
+            tta_runner = TTARunner(config['peft'], loss, tp=False, lora=True)
 
         elif any(param in ['ie'] for param in config.keys()):
             # [NOTE]: Choose Loss for PEFT here.
@@ -121,7 +121,7 @@ def run_tta(factory, status, datasets, config):
                                   config['ie']['mem']['weight'])
             else:
                 raise NotImplementedError
-            tta_runner = ImageEncoderTTARunner(config['ie'], loss, lora=False)
+            tta_runner = TTARunner(config['ie'], loss, tp=False, lora=False)
         else:
             raise TypeError
 
