@@ -203,9 +203,9 @@ class TTARunner():
         return top1.avg.item(), top5.avg.item()
 
 
-class ImageEncoderTTARunner():
+class TTARunnerAnalyser():
 
-    def __init__(self, config, loss, lora=True):
+    def __init__(self, config, loss, tp=False, lora=True):
         print(f'{self} created.')
         print(config)
         self._config = config
@@ -226,7 +226,14 @@ class ImageEncoderTTARunner():
         else:
             raise TypeError
 
+        self._tp = tp
         self._lora = lora
+
+        self.file_path = Path(f'analysis.txt')
+        if not self.file_path.exists():
+            self.file_path.touch()
+        else:
+            raise NotImplementedError('File already exists. No new file created.')
 
     def __call__(self, factory, status,
                  tta_dataset, prompts, classes,
@@ -234,35 +241,51 @@ class ImageEncoderTTARunner():
         model, tokenizer, _ = factory.create()
         model = model.to(device)
 
-        # [NOTE]: trainable parameters
-        if self._lora:
-            for name, param in model.image_encoder.named_parameters():
-                if 'lora' in name:
-                    param.requires_grad = True
+        # [NOTE]: Set trainable parameters
 
-        else: # [NOTE]: Image Encoder Tuning
-            # model.clip._image_projector.proj.weight.requires_grad = True
-            for i, layer in enumerate(model.image_encoder.transformer.layers):
-                if i in self._config.layers:
-                    for name, param in layer.named_parameters():
-                        if not 'lora' in name:
-                            if 'self_attn' in name:
-                                param.requires_grad = True
+        # [NOTE]: TPT
+        if self._tp:
+            model.clip.prompt_learner.ctx.requires_grad = True
+            arch = 'ViT-B/16'
+            trainable_param = model.clip.prompt_learner.parameters()
+            optimizer = build_tta_optimizer(trainable_param, self._config)
+            optim_state = deepcopy(optimizer.state_dict())
+            model.clip.reset_classnames(classes, arch)
+            model = model.to(device)
+            model.eval()
+            with torch.no_grad():
+                model.clip.reset()
+            text_embeddings = None
+
+
+        # [NOTE]: Image Encoder Tuning
+        else:
+            if self._lora:
+                for name, param in model.image_encoder.named_parameters():
+                    if 'lora' in name:
+                        param.requires_grad = True
+            else:
+                # model.clip._image_projector.proj.weight.requires_grad = True
+                for i, layer in enumerate(model.image_encoder.transformer.layers):
+                    if i in self._config.layers:
+                        for name, param in layer.named_parameters():
+                            if not 'lora' in name:
+                                if 'self_attn' in name:
+                                    param.requires_grad = True
+            text_embeddings = zeroshot_weights(model.clip, tokenizer, classes, prompts, device)
+            optimizer = build_tta_optimizer(model.image_encoder.parameters(), self._config)
+            optim_state = deepcopy(optimizer.state_dict())
 
         for name, param in model.named_parameters():
             print(f'{name}: {param.requires_grad}')
         trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
         print(f'Trainable parameters: {trainable_params}')
 
-        text_embeddings = zeroshot_weights(model.clip, tokenizer, classes, prompts, device)
-
-        optimizer = build_tta_optimizer(model, self._config)
-
         # setup automatic mixed-precision (Amp) loss scaling
-        scaler = torch.GradScaler()
+        scaler = torch.GradScaler(init_scale=1000)
 
         tta_data_loader = torch.utils.data.DataLoader(
-                    tta_dataset, batch_size=1, shuffle=False,
+                    tta_dataset, batch_size=1, shuffle=True,
                     num_workers=num_workers, pin_memory=pin_memory)
 
         top1 = AverageMeter('Acc@1', ':6.2f', Summary.AVERAGE)
@@ -281,10 +304,33 @@ class ImageEncoderTTARunner():
             image = images[0]
             images = torch.cat(images, dim=0)
 
-            # [TODO]: should load only LoRA and Decoder, not update text_encoder
-            model.mae.load_state_dict(status)
+            if self._tp:
+                # reset the tunable prompt to its initial state
+                with torch.no_grad():
+                    model.clip.reset()
+            else:
+                # [TODO]: should load only LoRA and Decoder, not update text_encoder
+                model.mae.load_state_dict(status)
+
+            # [NOTE]: inference
+            model.eval()
+            with torch.no_grad():
+                with torch.autocast(device_type='cuda'):
+                    image_features = model.clip.image_encode(image)
+                    image_features /= image_features.norm(dim=-1, keepdim=True)
+                    output = image_features @ text_embeddings
+                    scores = (100 * output).softmax(dim=-1) # logit_scale.exp() is 100
+                    socore_before_tta = scores[0][target[0]]
+
+            # measure accuracy and record loss
+            acc1, acc5 = accuracy(output, target, topk=(1, 5))
+            res_before_tta = True if acc1 == 100.0 else False
+
+
             model.train()
             for j in range(self._config.epochs):
+                if self._config.reset:
+                    optimizer.load_state_dict(optim_state)
                 with torch.autocast(device_type='cuda', enabled=self._amp):
                     loss = self._loss(model, images, text_embeddings)
                 optimizer.zero_grad()
@@ -301,216 +347,30 @@ class ImageEncoderTTARunner():
             model.eval()
             with torch.no_grad():
                 with torch.autocast(device_type='cuda'):
-                    image_features = model.clip.image_encode(image)
-                    image_features /= image_features.norm(dim=-1, keepdim=True)
-                    output = image_features @ text_embeddings
-
-            # measure accuracy and record loss
-            acc1, acc5 = accuracy(output, target, topk=(1, 5))
-            top1.update(acc1[0], image.size(0))
-            top5.update(acc5[0], image.size(0))
-
-            if (i+1) % 200 == 0:
-                progress.display(i)
-
-        return top1.avg.item(), top5.avg.item()
-
-
-class TextPromptTTARunner():
-
-    def __init__(self, config, loss):
-        print(f'{self} created.')
-        print(config)
-        self._config = config
-
-        # [NOTE]: MEM loss only here.
-        if isinstance(loss, MEMLoss):
-            self._loss = loss
-        else:
-            raise TypeError
-
-    def __call__(self, factory, status,
-                 tta_dataset, prompts, classes,
-                 num_workers=4, pin_memory=True, device='cuda'):
-        model, tokenizer, _ = factory.create()
-        model = model.to(device)
-
-        # [NOTE]: trainable parameters
-        model.clip.prompt_learner.ctx.requires_grad = True
-
-        for name, param in model.named_parameters():
-            print(f'{name}: {param.requires_grad}')
-
-        # [NOTE]: fixed parameters for TPT
-        arch = 'ViT-B/16'
-        trainable_param = model.clip.prompt_learner.parameters()
-        optimizer = torch.optim.AdamW(trainable_param, self._config.lr)
-        model.clip.reset_classnames(classes, arch)
-        model = model.to(device)
-
-        tta_data_loader = torch.utils.data.DataLoader(
-                    tta_dataset,
-                    batch_size=1, shuffle=False,
-                    num_workers=num_workers, pin_memory=pin_memory)
-
-        top1 = AverageMeter('Acc@1', ':6.2f', Summary.AVERAGE)
-        top5 = AverageMeter('Acc@5', ':6.2f', Summary.AVERAGE)
-
-        progress = ProgressMeter(
-            len(tta_data_loader),
-            [top1, top5],
-            prefix='Test: ')
-
-        model.eval()
-        with torch.no_grad():
-            model.clip.reset()
-
-        for i, (images, target) in tqdm(enumerate(tta_data_loader)):
-
-            for k in range(len(images)):
-                images[k] = images[k].to(device)
-            target = target.to(device)
-            image = images[0]
-            images = torch.cat(images, dim=0)
-
-            # reset the tunable prompt to its initial state
-            with torch.no_grad():
-                model.clip.reset()
-
-            model.train()
-            for j in range(self._config.epochs):
-                loss = self._loss(model, images, text_embeddings=None)
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
-
-            # [NOTE]: inference
-            model.eval()
-            with torch.no_grad():
-                with torch.autocast(device_type='cuda'):
-                    output = model.clip(image)
-            # measure accuracy and record loss
-            acc1, acc5 = accuracy(output, target, topk=(1, 5))
-            top1.update(acc1[0], image.size(0))
-            top5.update(acc5[0], image.size(0))
-
-            if (i+1) % 200 == 0:
-                progress.display(i)
-
-        return top1.avg.item(), top5.avg.item()
-
-
-class LoRATTAAnalyser():
-
-    def __init__(self, config, dataset, loss=False):
-        print(f'{self} created.')
-        print(config)
-        self._config = config
-
-        self.mem_loss = MEMLoss()
-        self.mae_loss = MAELoss()
-
-        self.file_path = Path(f'{dataset}.txt')
-        if not self.file_path.exists():
-            self.file_path.touch()
-        else:
-            raise NotImplementedError('File already exists. No new file created.')
-
-    def __call__(self, factory, status,
-                 tta_dataset, prompts, classes,
-                 num_workers=4, pin_memory=True, device='cuda'):
-        model, tokenizer, _ = factory.create()
-        model = model.to(device)
-
-        # [NOTE]: trainable parameters
-        for name, param in model.image_encoder.named_parameters():
-            if 'lora' in name:
-                param.requires_grad = True
-
-        for name, param in model.named_parameters():
-            print(f'{name}: {param.requires_grad}')
-
-        text_embeddings = zeroshot_weights(model.clip, tokenizer, classes, prompts, device)
-
-        optimizer = build_tta_optimizer(model, self._config)
-        # setup automatic mixed-precision (Amp) loss scaling
-        scaler = torch.GradScaler()
-
-        tta_data_loader = torch.utils.data.DataLoader(
-                    tta_dataset, batch_size=1, shuffle=False,
-                    num_workers=num_workers, pin_memory=pin_memory)
-
-        top1 = AverageMeter('Acc@1', ':6.2f', Summary.AVERAGE)
-        top5 = AverageMeter('Acc@5', ':6.2f', Summary.AVERAGE)
-
-        progress = ProgressMeter(
-            len(tta_data_loader),
-            [top1, top5],
-            prefix='Test: ')
-
-
-        for i, (images, target) in tqdm(enumerate(tta_data_loader)):
-
-            for k in range(len(images)):
-                images[k] = images[k].to(device)
-            target = target.to(device)
-            image = images[0]
-            images = torch.cat(images, dim=0)
-
-            # [TODO]: should load only LoRA and Decoder, not update text_encoder
-            model.mae.load_state_dict(status)
-
-            # [NOTE]: inference
-            model.eval()
-            with torch.no_grad():
-                with torch.autocast():
-                    image_features = model.clip.image_encode(image)
-                    image_features /= image_features.norm(dim=-1, keepdim=True)
-                    output = image_features @ text_embeddings
-                    scores = (100 * output).softmax(dim=-1) # logit_scale.exp() is 100
-                    socore_before_tta = scores[0][target[0]]
-
-            # measure accuracy and record loss
-            acc1, acc5 = accuracy(output, target, topk=(1, 5))
-            res_before_tta = True if acc1 == 100.0 else False
-
-            model.train()
-            for j in range(self._config.epochs):
-                with torch.autocast():
-                    mem_loss = self.mem_loss(model, images, text_embeddings)
-                    with torch.no_grad():
-                        mae_loss = self.mae_loss(model, images, text_embeddings)
-                optimizer.zero_grad()
-                # compute gradient and do SGD step
-                scaler.scale(mem_loss).backward()
-                # Unscales the gradients of optimizer's assigned params in-place
-                scaler.step(optimizer)
-                scaler.update()
-
-            set_scale(model.image_encoder, mem_loss.item())
-
-            # [NOTE]: inference
-            model.eval()
-            with torch.no_grad():
-                with torch.autocast():
-                    image_features = model.clip.image_encode(image)
-                    image_features /= image_features.norm(dim=-1, keepdim=True)
-                    output = image_features @ text_embeddings
+                    if self._tp:
+                        output = model.clip(image)
+                    else:
+                        image_features = model.clip.image_encode(image)
+                        image_features /= image_features.norm(dim=-1, keepdim=True)
+                        output = image_features @ text_embeddings
                     scores = (100 * output).softmax(dim=-1) # logit_scale.exp() is 100
                     socore_after_tta = scores[0][target[0]]
+
+
+            # measure accuracy and record loss
+            acc1, acc5 = accuracy(output, target, topk=(1, 5))
+            top1.update(acc1[0], image.size(0))
+            top5.update(acc5[0], image.size(0))
 
             # measure accuracy and record loss
             acc1, acc5 = accuracy(output, target, topk=(1, 5))
             res_after_tta = True if acc1 == 100.0 else False
 
-            top1.update(acc1[0], image.size(0))
-            top5.update(acc5[0], image.size(0))
-
             if (i+1) % 200 == 0:
                 progress.display(i)
 
             with open(self.file_path, 'a') as f:
-                f.write(f'{mem_loss.item()} {mae_loss.item()} {res_before_tta} {res_after_tta} {socore_before_tta.item()} {socore_after_tta.item()}\n')
+                f.write(f'{loss.item()} {res_before_tta} {res_after_tta} {socore_before_tta.item()} {socore_after_tta.item()}\n')
 
         return top1.avg.item(), top5.avg.item()
 
@@ -582,7 +442,7 @@ def zeroshot_weights(model, tokenizer, classnames, templates, device):
         for classname in tqdm(classnames):
             # 80 patterns per class
             texts = [template.format(classname) for template in templates] #format with class
-            max_length = 15
+            max_length = 77
             tokens = tokenizer(texts, padding=True, truncation=True, max_length=max_length)
             batch = {key: values.to(device) for key, values in tokens.items()}
             class_embeddings = model.text_encode(input_ids=batch["input_ids"], attention_mask=batch["attention_mask"]) #embed with text encoder
