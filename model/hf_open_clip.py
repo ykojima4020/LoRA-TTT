@@ -86,9 +86,9 @@ class HFOpenCLIP(nn.Module):
         loss = 0.5 * (loss_img + loss_text)
         return loss, logit_scale
 
-    def image_encode(self, image):
+    def image_encode(self, image, shuffler=None):
         # Getting Image and Text Features
-        image_features = self._image_encoder(image)[0][0, :, :]
+        image_features = self._image_encoder(image, shuffler=shuffler)[0][0, :, :]
         image_embeddings = self._image_projector(image_features)
         return image_embeddings 
 

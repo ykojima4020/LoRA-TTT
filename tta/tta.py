@@ -49,11 +49,65 @@ class MAELoss():
         loss, reconstruction, mask = model.mae(images)
         return loss
 
+class SelectionMAELoss():
+    def __init__(self):
+        self._selection_p = 0.1
+
+    def __call__(self, model, images, text_embeddings):
+        with torch.no_grad():
+            image_features = model.clip.image_encode(images)
+        image_features = image_features / image_features.norm(dim=-1, keepdim=True)
+        output = model.clip.logit_scale.exp() * (image_features @ text_embeddings)
+        _, selected_idx = select_confident_samples(output, self._selection_p)
+        images = images[selected_idx]
+        loss, reconstruction, mask = model.mae(images)
+        return loss
+
+from model.mae import PatchShuffle
+import torch.nn.functional as F
+class SelectionMAEConsistencyLoss():
+    def __init__(self):
+        self._selection_p = 0.1
+        mask_ratio = 0.5
+        self._shuffler = PatchShuffle(mask_ratio)
+
+    def __call__(self, model, images, text_embeddings):
+        with torch.no_grad():
+            image_features = model.clip.image_encode(images)
+        image_features = image_features / image_features.norm(dim=-1, keepdim=True)
+        sims = model.clip.logit_scale.exp() * (image_features @ text_embeddings)
+        sims, selected_idx = select_confident_samples(sims, self._selection_p)
+        images = images[selected_idx]
+
+        mask_image_features = model.clip.image_encode(images, self._shuffler)
+        mask_image_features = mask_image_features / mask_image_features.norm(dim=-1, keepdim=True)
+        mask_sims = model.clip.logit_scale.exp() * (mask_image_features @ text_embeddings)
+
+        prob = F.softmax(sims, dim=1)
+        mask_prob = F.softmax(mask_sims, dim=1)
+
+        log_mask_prob = torch.log(mask_prob)
+        loss = -torch.sum(prob * log_mask_prob, dim=1)
+        loss = torch.mean(loss)
+        return loss
+
 class MAEMEMLoss():
     def __init__(self, mae_weight, mem_weight):
         self._maew = mae_weight
         self._memw = mem_weight
         self._mae_loss = MAELoss()
+        self._mem_loss = MEMLoss()
+
+    def __call__(self, model, images, text_embeddings):
+        mem_loss = self._mem_loss(model, images, text_embeddings)
+        mae_loss = self._mae_loss(model, images, text_embeddings)
+        return (self._memw * mem_loss) + (self._maew * mae_loss)
+
+class SelectionMAEMEMLoss():
+    def __init__(self, mae_weight, mem_weight):
+        self._maew = mae_weight
+        self._memw = mem_weight
+        self._mae_loss = SelectionMAELoss()
         self._mem_loss = MEMLoss()
 
     def __call__(self, model, images, text_embeddings):
@@ -74,12 +128,20 @@ class TTARunner():
         #         https://discuss.pytorch.org/t/autocast-and-torch-no-grad-unexpected-behaviour/93475
         self._amp = False
 
+        print(f"{type(loss).__name__} is used.")
         if isinstance(loss, MEMLoss):
             self._loss = loss
             self._amp = True
         elif isinstance(loss, MAELoss):
             self._loss = loss
+        elif isinstance(loss, SelectionMAELoss):
+            self._loss = loss
+        elif isinstance(loss, SelectionMAEConsistencyLoss):
+            self._loss = loss
         elif isinstance(loss, MAEMEMLoss):
+            self._amp = True
+            self._loss = loss
+        elif isinstance(loss, SelectionMAEMEMLoss):
             self._amp = True
             self._loss = loss
         else:
