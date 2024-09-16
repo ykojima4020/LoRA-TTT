@@ -116,7 +116,7 @@ class SelectionMAEMEMLoss():
         return (self._memw * mem_loss) + (self._maew * mae_loss)
 
 
-class TTARunner():
+class TTARunnerIF():
 
     def __init__(self, config, loss, tp=False, lora=True):
         print(f'{self} created.')
@@ -153,6 +153,16 @@ class TTARunner():
     def __call__(self, factory, status,
                  tta_dataset, prompts, classes,
                  num_workers=4, pin_memory=True, device='cuda'):
+        raise NotImplementedError
+
+class TTARunner(TTARunnerIF):
+
+    def __init__(self, config, loss, tp=False, lora=True):
+        super().__init__(config, loss, tp=tp, lora=lora)
+
+    def __call__(self, factory, status,
+                 tta_dataset, prompts, classes,
+                 num_workers=4, pin_memory=True, device='cuda'):
         model, tokenizer, _ = factory.create()
         model = model.to(device)
 
@@ -171,7 +181,6 @@ class TTARunner():
             with torch.no_grad():
                 model.clip.reset()
             text_embeddings = None
-
 
         # [NOTE]: Image Encoder Tuning
         else:
@@ -265,33 +274,15 @@ class TTARunner():
         return top1.avg.item(), top5.avg.item()
 
 
-class TTARunnerAnalyser():
+class TTARunnerAnalyser(TTARunnerIF):
 
-    def __init__(self, config, loss, tp=False, lora=True):
-        print(f'{self} created.')
-        print(config)
-        self._config = config
+    def __init__(self, config, loss, tp=False, lora=True, file=None):
+        super().__init__(config, loss, tp=tp, lora=lora)
 
-        # [NOTE]: When using MAELoss, due to specific implementation constraints,
-        #         enabling AMP prevents the loss from ebing differentiable.
-        #         https://discuss.pytorch.org/t/autocast-and-torch-no-grad-unexpected-behaviour/93475
-        self._amp = False
-
-        if isinstance(loss, MEMLoss):
-            self._loss = loss
-            self._amp = True
-        elif isinstance(loss, MAELoss):
-            self._loss = loss
-        elif isinstance(loss, MAEMEMLoss):
-            self._amp = True
-            self._loss = loss
+        if file:
+            self.file_path = Path(file)
         else:
-            raise TypeError
-
-        self._tp = tp
-        self._lora = lora
-
-        self.file_path = Path(f'analysis.txt')
+            self.file_path = Path(f'analysis.txt')
         if not self.file_path.exists():
             self.file_path.touch()
         else:
@@ -346,8 +337,9 @@ class TTARunnerAnalyser():
         # setup automatic mixed-precision (Amp) loss scaling
         scaler = torch.GradScaler(init_scale=1000)
 
+        # [NOTE]: Dataset is not shuffled in the Analysis class
         tta_data_loader = torch.utils.data.DataLoader(
-                    tta_dataset, batch_size=1, shuffle=True,
+                    tta_dataset, batch_size=1, shuffle=False,
                     num_workers=num_workers, pin_memory=pin_memory)
 
         top1 = AverageMeter('Acc@1', ':6.2f', Summary.AVERAGE)
