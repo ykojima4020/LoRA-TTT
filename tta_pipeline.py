@@ -83,7 +83,7 @@ def run_tta(factory, status, datasets, config):
             loss = config['tp']['loss']
             if ('mem' in loss) and not ('mae' in loss):
                 # [NOTE]: MEM for updating LoRA
-                loss = MEMLoss(tpt=True)
+                loss = MEMLoss(tpt=True, selection_p=config['tp']['selection_p'])
             else:
                 raise NotImplementedError
             # [NOTE]: Choose Loss for Text Prompt here.
@@ -166,21 +166,22 @@ def loss_selector(config):
     loss = sorted(loss)
     if loss == ['mem']:
         # [NOTE]: MEM for updating LoRA
-        loss = MEMLoss()
+        loss = MEMLoss(selection_p=config['selection_p'])
     elif loss == ['mae']:
         # [NOTE]: MAE for updating LoRA
         loss = MAELoss()
     elif loss == ['mae_selection']:
-        loss = SelectionMAELoss()
+        loss = SelectionMAELoss(selection_p=config['selection_p'])
     elif loss == ['mae_selection_consis']:
-        loss = SelectionMAEConsistencyLoss()
+        loss = SelectionMAEConsistencyLoss(selection_p=config['selection_p'])
     elif loss == ['mae', 'mem']:
         # [NOTE]: MAE + MEM for updating LoRA
         loss = MAEMEMLoss(config['mae']['weight'],
                           config['mem']['weight'])
     elif loss == ['mae_selection', 'mem']:
         loss = SelectionMAEMEMLoss(config['mae']['weight'],
-                              config['mem']['weight'])
+                                   config['mem']['weight'],
+                                   selection_p=config['selection_p'])
     else:
         raise NotImplementedError
     return loss

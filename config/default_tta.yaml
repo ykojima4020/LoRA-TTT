@@ -112,11 +112,11 @@ model:
     alpha: 1
   peft:
     name: 'lora'
-    r: 32
-    alpha_r_scale: 16
+    r: 16
+    alpha_r_scale: 2
     target_modules: ["k_proj", "v_proj", "q_proj", "out_proj"]
     dropout: 0.01
-    layers_to_transform: [8,9,10,11]
+    layers_to_transform: [10,11]
 
 train:
   start_epoch: 0
@@ -142,9 +142,9 @@ tta:
     lr: 1e-3
     weight_decay: 0.2
     eps: 1e-8
-    # betas: [0.9, 0.95]
     betas: [0.9, 0.999] # default
     loss: ['mem']
+    selection_p: 0.1
     reset: true
     adaptive: false
     mae:
@@ -161,6 +161,7 @@ tta:
     eps: 1e-8
     betas: [0.9, 0.999] # default
     loss: ['mem']
+    selection_p: 0.1
     layers: [11]
     reset: true
     adaptive: false
@@ -178,6 +179,7 @@ tta:
     eps: 1e-8           # default
     betas: [0.9, 0.999] # default
     loss: ['mem']
+    selection_p: 0.1
     reset: true
     adaptive: false
     mem:

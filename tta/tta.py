@@ -50,8 +50,8 @@ class MAELoss():
         return loss
 
 class SelectionMAELoss():
-    def __init__(self):
-        self._selection_p = 0.1
+    def __init__(self, selection_p=0.1):
+        self._selection_p = selection_p
 
     def __call__(self, model, images, text_embeddings):
         with torch.no_grad():
@@ -66,8 +66,8 @@ class SelectionMAELoss():
 from model.mae import PatchShuffle
 import torch.nn.functional as F
 class SelectionMAEConsistencyLoss():
-    def __init__(self):
-        self._selection_p = 0.1
+    def __init__(self, selection_p=0.1):
+        self._selection_p = selection_p
         mask_ratio = 0.5
         self._shuffler = PatchShuffle(mask_ratio)
 
@@ -104,11 +104,11 @@ class MAEMEMLoss():
         return (self._memw * mem_loss) + (self._maew * mae_loss)
 
 class SelectionMAEMEMLoss():
-    def __init__(self, mae_weight, mem_weight):
+    def __init__(self, mae_weight, mem_weight, selection_p=0.1):
         self._maew = mae_weight
         self._memw = mem_weight
-        self._mae_loss = SelectionMAELoss()
-        self._mem_loss = MEMLoss()
+        self._mae_loss = SelectionMAELoss(selection_p=selection_p)
+        self._mem_loss = MEMLoss(selection_p=selection_p)
 
     def __call__(self, model, images, text_embeddings):
         mem_loss = self._mem_loss(model, images, text_embeddings)
