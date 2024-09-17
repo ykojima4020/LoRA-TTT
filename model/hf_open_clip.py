@@ -32,6 +32,7 @@ class HFOpenCLIPImageEncoder(nn.Module):
              x, forward_indexes, backward_indexes = shuffler(x)
              x = rearrange(x, 't b c -> b t c')
         else:
+             forward_indexes = None
              backward_indexes = None
 
         cls_token_pos = self.cls_token + self.pos_embedding[0]			# torch.Size([768])
@@ -42,7 +43,7 @@ class HFOpenCLIPImageEncoder(nn.Module):
         x = self.ln_post(x)							# -> torch.Size([B, 197, 768]
 
         x = rearrange(x, 'b t c -> t b c')
-        return x, backward_indexes
+        return x, forward_indexes, backward_indexes
 
 class HFOpenCLIPImageProjector(nn.Module):
     def __init__(self, model):
