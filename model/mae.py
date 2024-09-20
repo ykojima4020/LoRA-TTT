@@ -121,7 +121,6 @@ class MAEFeatureDecoder(torch.nn.Module):
         features = rearrange(features, 't b c -> b t c')
         features = self.transformer(features)
         features = rearrange(features, 'b t c -> t b c')
-        features = features[0] # extract global feature
 
         return features, None
 
@@ -185,6 +184,7 @@ class PixelMAE(torch.nn.Module):
         loss = torch.mean((reconstruction - image) ** 2 * mask) / self.mask_ratio
         return loss, reconstruction, mask
 
+# [NOTE]: This EMA function will be deprecated soon.
 class FeatureEMAMAE(torch.nn.Module):
     def __init__(self, encoder, decoder, mask_ratio, decay=0.9999) -> None: 
         super().__init__()
@@ -210,7 +210,7 @@ class FeatureEMAMAE(torch.nn.Module):
         # [NOTE]: output image as dummy
         return loss, image, mask
 
-class FeatureMAE(torch.nn.Module):
+class CLSTokenMAE(torch.nn.Module):
     def __init__(self, encoder, decoder, mask_ratio) -> None:
         super().__init__()
 
@@ -222,16 +222,17 @@ class FeatureMAE(torch.nn.Module):
     def forward(self, image):
         # [NOTE]: extract class token features from EMA encoder
         with torch.no_grad():
-            image_features = self.encoder(image)[0][0, :, :]
+            cls_token = self.encoder(image)[0][0, :, :]
 
         features, _, backward_indexes = self.encoder(image, self._shuffler)
-        reconstruction, mask = self.decoder(features,  backward_indexes)
+        reconstruct_features, mask = self.decoder(features,  backward_indexes)
+        reconstruct_cls_token = reconstruct_features[0]
 
-        loss = torch.mean((reconstruction - image_features) ** 2) / self.mask_ratio
+        loss = torch.mean((reconstruct_cls_token - cls_token) ** 2) / self.mask_ratio
         # [NOTE]: output image as dummy
         return loss, image, mask
 
-class FeatureMAEWithoutDecoder(torch.nn.Module):
+class CLSTokenMAEWithoutDecoder(torch.nn.Module):
     def __init__(self, encoder, decoder, mask_ratio) -> None:
         super().__init__()
 

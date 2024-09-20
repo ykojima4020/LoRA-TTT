@@ -7,7 +7,7 @@ from transformers import CLIPModel, CLIPProcessor
 
 from model.clip import CLIP
 from model.modules import TextEncoder, ProjectionHead
-from model.mae import ImageEncoder, MAEPixelDecoder, MAEFeatureDecoder, PixelMAE, FeatureMAE, FeatureMAEWithoutDecoder
+from model.mae import ImageEncoder, MAEPixelDecoder, MAEFeatureDecoder, PixelMAE, CLSTokenMAE, CLSTokenMAEWithoutDecoder
 from model.mae_clip import MAECLIP
 
 from model.models_rils import RILSMAEEncoder
@@ -137,9 +137,9 @@ class PretrainedOpenCLIPFactory(Factory):
                 emb_dim=self._emb_dim, num_layer=self._decoder_layer,
                 num_head=self._decoder_head)
             if self._mae_decoder:
-                mae = FeatureMAE(image_encoder, image_decoder, self._mask_ratio)
+                mae = CLSTokenMAE(image_encoder, image_decoder, self._mask_ratio)
             else:
-                mae = FeatureMAEWithoutDecoder(image_encoder, None, self._mask_ratio)
+                mae = CLSTokenMAEWithoutDecoder(image_encoder, None, self._mask_ratio)
             print(f"{type(mae).__name__} is created.")
         else:
             raise TypeError(f'{self._mae_loss_type} is invalid.')
@@ -232,9 +232,9 @@ class PretrainedHFOpenCLIPFactory(Factory):
                 emb_dim=self._emb_dim, num_layer=self._decoder_layer,
                 num_head=self._decoder_head)
             if self._mae_decoder:
-                mae = FeatureMAE(image_encoder, image_decoder, self._mask_ratio)
+                mae = CLSTokenMAE(image_encoder, image_decoder, self._mask_ratio)
             else:
-                mae = FeatureMAEWithoutDecoder(image_encoder, None, self._mask_ratio)
+                mae = CLSTokenMAEWithoutDecoder(image_encoder, None, self._mask_ratio)
             print(f"{type(mae).__name__} is created.")
         else:
             raise TypeError(f'{self._mae_loss_type} is invalid.')
