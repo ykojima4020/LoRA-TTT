@@ -246,11 +246,11 @@ class FeatureMAEWithoutDecoder(torch.nn.Module):
     def forward(self, image):
         # [NOTE]: extract class token features from EMA encoder
         with torch.no_grad():
-            image_features = self.encoder(image)[0][0, :, :]				# image_features is torch.Size([64, 768])
+            cls_token = self.encoder(image)[0][0, :, :]					# image_features is torch.Size([B, 768])
 
-        target_features = self.encoder(image, self._shuffler)[0][0, :, :]		# features.shape is torch.Size([50, 64, 768])
+        mask_cls_token = self.encoder(image, self._shuffler)[0][0, :, :]		# features.shape is torch.Size([B, 768])
 
-        loss = torch.mean((target_features - image_features) ** 2) / self.mask_ratio
+        loss = torch.mean((mask_cls_token - cls_token) ** 2) / self.mask_ratio
         # [NOTE]: output image as dummy
         return loss, image, None
 
