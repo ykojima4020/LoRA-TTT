@@ -46,6 +46,7 @@ class ZeroShotEvaluator(Evaluator):
         return [float(correct[:k].reshape(-1).float().sum(0, keepdim=True).cpu().numpy()) for k in topk]
  
     def __call__(self, model, update=True):
+        model.eval()
         if update or (self._zeroshot_weights is None):
             self._zeroshot_weights = self._zeroshot_classifier(model, self._imagenet_classes, self._prompts)
         with torch.no_grad():

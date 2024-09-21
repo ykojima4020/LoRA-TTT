@@ -244,14 +244,21 @@ class CLSTokenMAEWithoutDecoder(torch.nn.Module):
         self.decoder = torch.nn.Module()
         self.mask_ratio = mask_ratio
 
-    def forward(self, image):
+    def forward(self, image, coefficient=None):
         # [NOTE]: extract class token features from EMA encoder
         with torch.no_grad():
-            cls_token = self.encoder(image)[0][0, :, :]					# image_features is torch.Size([B, 768])
+            cls_token = self.encoder(image)[0][0, :, :]					# torch.Size([B, 768])
 
-        mask_cls_token = self.encoder(image, self._shuffler)[0][0, :, :]		# features.shape is torch.Size([B, 768])
+        mask_cls_token = self.encoder(image, self._shuffler)[0][0, :, :]		# torch.Size([B, 768])
 
-        loss = torch.mean((mask_cls_token - cls_token) ** 2) / self.mask_ratio
+        per_sample_loss = torch.mean((mask_cls_token - cls_token) ** 2, dim=1) / self.mask_ratio  # 各サンプルごとの損失
+
+        if coefficient is not None:
+            per_sample_loss = per_sample_loss * coefficient
+
+        # [NOTE]: バッチ全体の平均損失を計算
+        loss = torch.mean(per_sample_loss)
+
         # [NOTE]: output image as dummy
         return loss, image, None
 
