@@ -37,13 +37,32 @@ class PatchShuffle(torch.nn.Module):
         remain_T = int(T * (1 - self.ratio))
 
         indexes = [random_indexes(T) for _ in range(B)]
-        forward_indexes = torch.as_tensor(np.stack([i[0] for i in indexes], axis=-1), dtype=torch.long).to(patches.device)
-        backward_indexes = torch.as_tensor(np.stack([i[1] for i in indexes], axis=-1), dtype=torch.long).to(patches.device)
+        forward_indexes = torch.as_tensor(np.stack([i[0] for i in indexes], axis=-1), dtype=torch.long).to(patches.device)	# torch.Size([196, B])
+        backward_indexes = torch.as_tensor(np.stack([i[1] for i in indexes], axis=-1), dtype=torch.long).to(patches.device)	# torch.Size([196, B])
 
-        patches = take_indexes(patches, forward_indexes)
+        patches = take_indexes(patches, forward_indexes)	# torch.Size([196, B, 768])
+        patches = patches[:remain_T]				# torch.Size([49, B, 768])
+
+        return patches, forward_indexes, backward_indexes
+
+class MyMasking(torch.nn.Module):
+    def __init__(self, ratio, mask_indices) -> None:
+        super().__init__()
+        self.ratio = ratio
+        self.mask_indices = mask_indices
+
+    def forward(self, patches : torch.Tensor):
+        T, B, C = patches.shape
+        remain_T = int(T * (1 - self.ratio))
+
+        forward_indexes = None
+        backward_indexes = None
+
+        patches = take_indexes(patches, self.mask_indices)		#  torch.Size([196, B, 768])
         patches = patches[:remain_T]
 
         return patches, forward_indexes, backward_indexes
+
 
 class ImageEncoder(torch.nn.Module):
     def __init__(self,
@@ -85,7 +104,7 @@ class ImageEncoder(torch.nn.Module):
         features = self.layer_norm(self.transformer(patches))
         features = rearrange(features, 'b t c -> t b c')
 
-        return features, backward_indexes
+        return features, forward_indexes, backward_indexes
 
 class MAEFeatureDecoder(torch.nn.Module):
     def __init__(self,
@@ -121,7 +140,6 @@ class MAEFeatureDecoder(torch.nn.Module):
         features = rearrange(features, 't b c -> b t c')
         features = self.transformer(features)
         features = rearrange(features, 'b t c -> t b c')
-        features = features[0] # extract global feature
 
         return features, None
 
@@ -180,11 +198,12 @@ class PixelMAE(torch.nn.Module):
         self.mask_ratio = mask_ratio
 
     def forward(self, image):
-        features, backward_indexes = self.encoder(image, self._shuffler)
+        features, _, backward_indexes = self.encoder(image, self._shuffler)
         reconstruction, mask = self.decoder(features,  backward_indexes)
         loss = torch.mean((reconstruction - image) ** 2 * mask) / self.mask_ratio
         return loss, reconstruction, mask
 
+# [NOTE]: This EMA function will be deprecated soon.
 class FeatureEMAMAE(torch.nn.Module):
     def __init__(self, encoder, decoder, mask_ratio, decay=0.9999) -> None: 
         super().__init__()
@@ -203,14 +222,14 @@ class FeatureEMAMAE(torch.nn.Module):
         # [NOTE]: extract class token features from EMA encoder
         image_features = self.ema.module(image)[0][0, :, :]
 
-        features, backward_indexes = self.encoder(image, self._shuffler)
+        features, _, backward_indexes = self.encoder(image, self._shuffler)
         reconstruction, mask = self.decoder(features,  backward_indexes)
 
         loss = torch.mean((reconstruction - image_features) ** 2) / self.mask_ratio
         # [NOTE]: output image as dummy
         return loss, image, mask
 
-class FeatureMAE(torch.nn.Module):
+class CLSTokenMAE(torch.nn.Module):
     def __init__(self, encoder, decoder, mask_ratio) -> None:
         super().__init__()
 
@@ -222,16 +241,47 @@ class FeatureMAE(torch.nn.Module):
     def forward(self, image):
         # [NOTE]: extract class token features from EMA encoder
         with torch.no_grad():
-            image_features = self.encoder(image)[0][0, :, :]
+            cls_token = self.encoder(image)[0][0, :, :]
 
-        features, backward_indexes = self.encoder(image, self._shuffler)
-        reconstruction, mask = self.decoder(features,  backward_indexes)
+        features, _, backward_indexes = self.encoder(image, self._shuffler)
+        reconstruct_features, mask = self.decoder(features,  backward_indexes)
+        reconstruct_cls_token = reconstruct_features[0]
 
-        loss = torch.mean((reconstruction - image_features) ** 2) / self.mask_ratio
+        loss = torch.mean((reconstruct_cls_token - cls_token) ** 2) / self.mask_ratio
         # [NOTE]: output image as dummy
         return loss, image, mask
 
-class FeatureMAEWithoutDecoder(torch.nn.Module):
+class CLSTokenMAEWithoutDecoder(torch.nn.Module):
+    def __init__(self, encoder, decoder, mask_ratio) -> None:
+        super().__init__()
+
+        if not isinstance(decoder, type(None)):
+            print(f'{type(decoder)} is not supported and should be None.')
+            raise TypeError
+        self._shuffler = PatchShuffle(mask_ratio)
+        self.encoder = encoder
+        self.decoder = torch.nn.Module()
+        self.mask_ratio = mask_ratio
+
+    def forward(self, image, coefficient=None):
+        # [NOTE]: extract class token features from EMA encoder
+        with torch.no_grad():
+            cls_token = self.encoder(image)[0][0, :, :]					# torch.Size([B, 768])
+
+        mask_cls_token = self.encoder(image, self._shuffler)[0][0, :, :]		# torch.Size([B, 768])
+
+        per_sample_loss = torch.mean((mask_cls_token - cls_token) ** 2, dim=1) / self.mask_ratio  # 各サンプルごとの損失
+
+        if coefficient is not None:
+            per_sample_loss = per_sample_loss * coefficient
+
+        # [NOTE]: バッチ全体の平均損失を計算
+        loss = torch.mean(per_sample_loss)
+
+        # [NOTE]: output image as dummy
+        return loss, image, None
+
+class FeatureAllMAEWithoutDecoder(torch.nn.Module):
     def __init__(self, encoder, decoder, mask_ratio) -> None:
         super().__init__()
 
@@ -246,11 +296,66 @@ class FeatureMAEWithoutDecoder(torch.nn.Module):
     def forward(self, image):
         # [NOTE]: extract class token features from EMA encoder
         with torch.no_grad():
-            image_features = self.encoder(image)[0][0, :, :]				# image_features is torch.Size([64, 768])
+            target_features = self.encoder(image)[0][1:]					# torch.Size([196, B, 768])
+        T, B, C = target_features.shape
+        remain_T = int(T * (1 - self.mask_ratio))
 
-        features, backward_indexes = self.encoder(image, self._shuffler)		# features.shape is torch.Size([50, 64, 768]) 
-        target_features = features[0, :, :]
+        image_features, forward_indexes, _ = self.encoder(image, self._shuffler)		# features.shape is torch.Size([50, 64, 768])
+        image_features = image_features[1:, :, :]						# torch.Size([49, B, 768])
 
-        loss = torch.mean((target_features - image_features) ** 2) / self.mask_ratio
+        target_features = take_indexes(target_features, forward_indexes)			# torch.Size([196, 6, 768])
+        visible_target_features = target_features[:remain_T]					# torch.Size([49, 6, 768])
+
+        loss = torch.mean((image_features - visible_target_features) ** 2) / self.mask_ratio
+        # [NOTE]: output image as dummy
+        return loss, image, None
+
+
+class UncertaintyMaskingMAE(torch.nn.Module):
+    def __init__(self, encoder, decoder, mask_ratio) -> None:
+        super().__init__()
+
+        if not isinstance(decoder, type(None)):
+            print(f'{type(decoder)} is not supported and should be None.')
+            raise TypeError
+        self.encoder = encoder
+        # [NOTE] add dropout in order to perform MC Dropout
+        self.encoder.transformer.layers[0].mlp.fc1 = torch.nn.Sequential(
+                                                     self.encoder.transformer.layers[0].mlp.fc1,
+                                                     torch.nn.Dropout(p=0.2)
+                                                     )
+        self.decoder = torch.nn.Module()
+        self.mask_ratio = mask_ratio
+        self.n_forward = 10
+
+    def forward(self, image):
+        if not self.encoder.training:
+            raise RuntimeError('Model is not in trainig mode.')
+
+        n_outputs = []
+        for i in range(self.n_forward):
+            with torch.no_grad():
+                image_features = self.encoder(image)[0]				# torch.Size([197, B, 768])
+                visual_tokens = image_features[1:, :, :]			# torch.Size([196, B, 768])
+                visual_tokens = visual_tokens.mean(dim=2)			# torch.Size([196, B])
+                n_outputs.append(visual_tokens)
+        stacked_outputs_ = torch.stack(n_outputs, dim=0)			# torch.Size([10, 196, B])
+
+        variance = torch.var(stacked_outputs_, dim=0)				# torch.Size([196, 6])
+
+        # smaller is first
+        sorted_data, sorted_indices = torch.sort(variance, dim=0, descending=True)
+
+        # calculate mask index here.
+        masking = MyMasking(self.mask_ratio, sorted_indices)
+
+        # mask_image_patches_batch(image, sorted_indices, './images/')
+
+        with torch.no_grad():
+            ref_cls_token = self.encoder(image)[0][0, :, :]			# torch.Size([B, 768])
+
+        mask_cls_token = self.encoder(image, masking)[0][0, :, :]		# torch.Size([B, 768])
+
+        loss = torch.mean((mask_cls_token - ref_cls_token) ** 2) / self.mask_ratio
         # [NOTE]: output image as dummy
         return loss, image, None

@@ -17,7 +17,7 @@ sys.path.append('../')
 from evaluator.evaluator import ZeroShotEvaluator
 from evaluator.imagenet_config import simple_prompts, ensemble_prompts, imagenet_classes
 from evaluator.imagenet_variant_config import imagenet_a_classes, imagenet_r_classes
-from tta import TTARunner, MAELoss, MEMLoss, MAEMEMLoss
+from tta import TTARunner, MAELoss, WeightedMAELoss, MAEConsistencyLoss, MEMLoss, MAEMEMLoss
 
 from misc.tpt_transforms import AugMixAugmenter
 from misc.logger import get_logger
@@ -83,7 +83,7 @@ def run_tta(factory, status, datasets, config):
             loss = config['tp']['loss']
             if ('mem' in loss) and not ('mae' in loss):
                 # [NOTE]: MEM for updating LoRA
-                loss = MEMLoss(tpt=True)
+                loss = MEMLoss(tpt=True, selection_p=config['tp']['selection_p'])
             else:
                 raise NotImplementedError
             # [NOTE]: Choose Loss for Text Prompt here.
@@ -91,36 +91,12 @@ def run_tta(factory, status, datasets, config):
 
         elif any(param in ['peft'] for param in config.keys()):
             # [NOTE]: Choose Loss for PEFT here.
-            loss = config['peft']['loss']
-            if ('mem' in loss) and not ('mae' in loss):
-                # [NOTE]: MEM for updating LoRA
-                loss = MEMLoss()
-            elif not ('mem' in loss) and ('mae' in loss):
-                # [NOTE]: MAE for updating LoRA
-                loss = MAELoss()
-            elif ('mem' in loss) and ('mae' in loss):
-                # [NOTE]: MAE + MEM for updating LoRA
-                loss = MAEMEMLoss(config['peft']['mae']['weight'],
-                                  config['peft']['mem']['weight'])
-            else:
-                raise NotImplementedError
+            loss = loss_selector(config['peft'])
             tta_runner = TTARunner(config['peft'], loss, tp=False, lora=True)
 
         elif any(param in ['ie'] for param in config.keys()):
             # [NOTE]: Choose Loss for PEFT here.
-            loss = config['ie']['loss']
-            if ('mem' in loss) and not ('mae' in loss):
-                # [NOTE]: MEM for updating LoRA
-                loss = MEMLoss()
-            elif not ('mem' in loss) and ('mae' in loss):
-                # [NOTE]: MAE for updating LoRA
-                loss = MAELoss()
-            elif ('mem' in loss) and ('mae' in loss):
-                # [NOTE]: MAE + MEM for updating LoRA
-                loss = MAEMEMLoss(config['ie']['mae']['weight'],
-                                  config['ie']['mem']['weight'])
-            else:
-                raise NotImplementedError
+            loss = loss_selector(config['ie'])
             tta_runner = TTARunner(config['ie'], loss, tp=False, lora=False)
         else:
             raise TypeError
@@ -185,3 +161,24 @@ def run_tta(factory, status, datasets, config):
                      'all': datasets_stats}}
     return stats
 
+def loss_selector(config):
+    loss = config['loss']
+    loss = sorted(loss)
+    if loss == ['mem']:
+        # [NOTE]: MEM for updating LoRA
+        loss = MEMLoss(selection_p=config['selection_p'])
+    elif loss == ['mae']:
+        # [NOTE]: MAE for updating LoRA
+        loss = MAELoss(selection_p=config['selection_p'])
+    elif loss == ['weighted_mae']:
+        loss = WeightedMAELoss(selection_p=config['selection_p'])
+    elif loss == ['mae_consis']:
+        loss = MAEConsistencyLoss(selection_p=config['selection_p'])
+    elif loss == ['mae', 'mem']:
+        # [NOTE]: MAE + MEM for updating LoRA
+        loss = MAEMEMLoss(config['mae']['weight'],
+                          config['mem']['weight'],
+                          selection_p=config['selection_p'])
+    else:
+        raise NotImplementedError
+    return loss

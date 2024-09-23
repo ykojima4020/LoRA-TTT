@@ -42,19 +42,78 @@ class MEMLoss():
         return loss
 
 class MAELoss():
-    def __init__(self):
-        pass
+    def __init__(self, selection_p=0.1):
+        self._selection_p = selection_p
 
     def __call__(self, model, images, text_embeddings):
+        # [NOTE]: confidence selection
+        if self._selection_p != 1:
+            with torch.no_grad():
+                image_features = model.clip.image_encode(images)
+            image_features = image_features / image_features.norm(dim=-1, keepdim=True)
+            output = model.clip.logit_scale.exp() * (image_features @ text_embeddings)
+            _, selected_idx = select_confident_samples(output, self._selection_p)
+            images = images[selected_idx]
+
         loss, reconstruction, mask = model.mae(images)
         return loss
 
+
+class WeightedMAELoss():
+    def __init__(self, selection_p=0.1):
+        self._selection_p = selection_p
+
+    def __call__(self, model, images, text_embeddings):
+        # [NOTE]: confidence selection
+        with torch.no_grad():
+            image_features = model.clip.image_encode(images)
+        image_features = image_features / image_features.norm(dim=-1, keepdim=True)
+        output = model.clip.logit_scale.exp() * (image_features @ text_embeddings)
+        selected_logits, selected_idx = select_confident_samples(output, self._selection_p)
+        images = images[selected_idx]
+
+        # [NOTE]: weight calculation
+        coefficient, _ = weighted_entropy(selected_logits)
+        loss, _, _ = model.mae(images, coefficient=coefficient)
+
+        return loss
+
+
+from model.mae import PatchShuffle
+import torch.nn.functional as F
+class MAEConsistencyLoss():
+    def __init__(self, selection_p=0.1):
+        self._selection_p = selection_p
+        mask_ratio = 0.5
+        self._shuffler = PatchShuffle(mask_ratio)
+
+    def __call__(self, model, images, text_embeddings):
+        with torch.no_grad():
+            image_features = model.clip.image_encode(images)
+        image_features = image_features / image_features.norm(dim=-1, keepdim=True)
+        sims = model.clip.logit_scale.exp() * (image_features @ text_embeddings)
+        sims, selected_idx = select_confident_samples(sims, self._selection_p)
+        images = images[selected_idx]
+
+        mask_image_features = model.clip.image_encode(images, self._shuffler)
+        mask_image_features = mask_image_features / mask_image_features.norm(dim=-1, keepdim=True)
+        mask_sims = model.clip.logit_scale.exp() * (mask_image_features @ text_embeddings)
+
+        prob = F.softmax(sims, dim=1)
+        mask_prob = F.softmax(mask_sims, dim=1)
+
+        log_mask_prob = torch.log(mask_prob)
+        loss = -torch.sum(prob * log_mask_prob, dim=1)
+        loss = torch.mean(loss)
+        return loss
+
+
 class MAEMEMLoss():
-    def __init__(self, mae_weight, mem_weight):
+    def __init__(self, mae_weight, mem_weight, selection_p=0.1):
         self._maew = mae_weight
         self._memw = mem_weight
-        self._mae_loss = MAELoss()
-        self._mem_loss = MEMLoss()
+        self._mae_loss = MAELoss(selection_p=selection_p)
+        self._mem_loss = MEMLoss(selection_p=selection_p)
 
     def __call__(self, model, images, text_embeddings):
         mem_loss = self._mem_loss(model, images, text_embeddings)
@@ -62,7 +121,7 @@ class MAEMEMLoss():
         return (self._memw * mem_loss) + (self._maew * mae_loss)
 
 
-class TTARunner():
+class TTARunnerIF():
 
     def __init__(self, config, loss, tp=False, lora=True):
         print(f'{self} created.')
@@ -74,10 +133,15 @@ class TTARunner():
         #         https://discuss.pytorch.org/t/autocast-and-torch-no-grad-unexpected-behaviour/93475
         self._amp = False
 
+        print(f"{type(loss).__name__} is used.")
         if isinstance(loss, MEMLoss):
             self._loss = loss
             self._amp = True
         elif isinstance(loss, MAELoss):
+            self._loss = loss
+        elif isinstance(loss, WeightedMAELoss):
+            self._loss = loss
+        elif isinstance(loss, MAEConsistencyLoss):
             self._loss = loss
         elif isinstance(loss, MAEMEMLoss):
             self._amp = True
@@ -87,6 +151,16 @@ class TTARunner():
 
         self._tp = tp
         self._lora = lora
+
+    def __call__(self, factory, status,
+                 tta_dataset, prompts, classes,
+                 num_workers=4, pin_memory=True, device='cuda'):
+        raise NotImplementedError
+
+class TTARunner(TTARunnerIF):
+
+    def __init__(self, config, loss, tp=False, lora=True):
+        super().__init__(config, loss, tp=tp, lora=lora)
 
     def __call__(self, factory, status,
                  tta_dataset, prompts, classes,
@@ -110,7 +184,6 @@ class TTARunner():
                 model.clip.reset()
             text_embeddings = None
 
-
         # [NOTE]: Image Encoder Tuning
         else:
             if self._lora:
@@ -118,7 +191,6 @@ class TTARunner():
                     if 'lora' in name:
                         param.requires_grad = True
             else:
-                # model.clip._image_projector.proj.weight.requires_grad = True
                 for i, layer in enumerate(model.image_encoder.transformer.layers):
                     if i in self._config.layers:
                         for name, param in layer.named_parameters():
@@ -203,33 +275,15 @@ class TTARunner():
         return top1.avg.item(), top5.avg.item()
 
 
-class TTARunnerAnalyser():
+class TTARunnerAnalyser(TTARunnerIF):
 
-    def __init__(self, config, loss, tp=False, lora=True):
-        print(f'{self} created.')
-        print(config)
-        self._config = config
+    def __init__(self, config, loss, tp=False, lora=True, file=None):
+        super().__init__(config, loss, tp=tp, lora=lora)
 
-        # [NOTE]: When using MAELoss, due to specific implementation constraints,
-        #         enabling AMP prevents the loss from ebing differentiable.
-        #         https://discuss.pytorch.org/t/autocast-and-torch-no-grad-unexpected-behaviour/93475
-        self._amp = False
-
-        if isinstance(loss, MEMLoss):
-            self._loss = loss
-            self._amp = True
-        elif isinstance(loss, MAELoss):
-            self._loss = loss
-        elif isinstance(loss, MAEMEMLoss):
-            self._amp = True
-            self._loss = loss
+        if file:
+            self.file_path = Path(file)
         else:
-            raise TypeError
-
-        self._tp = tp
-        self._lora = lora
-
-        self.file_path = Path(f'analysis.txt')
+            self.file_path = Path(f'analysis.txt')
         if not self.file_path.exists():
             self.file_path.touch()
         else:
@@ -284,8 +338,9 @@ class TTARunnerAnalyser():
         # setup automatic mixed-precision (Amp) loss scaling
         scaler = torch.GradScaler(init_scale=1000)
 
+        # [NOTE]: Dataset is not shuffled in the Analysis class
         tta_data_loader = torch.utils.data.DataLoader(
-                    tta_dataset, batch_size=1, shuffle=True,
+                    tta_dataset, batch_size=1, shuffle=False,
                     num_workers=num_workers, pin_memory=pin_memory)
 
         top1 = AverageMeter('Acc@1', ':6.2f', Summary.AVERAGE)
@@ -416,6 +471,19 @@ def avg_entropy(outputs):
     min_real = torch.finfo(avg_logits.dtype).min
     avg_logits = torch.clamp(avg_logits, min=min_real)
     return -(avg_logits * torch.exp(avg_logits)).sum(dim=-1)
+
+def weighted_entropy(logits, scaling_factor=0.4):
+    log_probs = logits - logits.logsumexp(dim=-1, keepdim=True)			# torch.Size([N, C])
+    min_val = torch.finfo(log_probs.dtype).min
+    log_probs = torch.clamp(log_probs, min=min_val)
+    probs = torch.exp(log_probs)
+    entropy = -torch.sum(probs * log_probs, dim=1)
+
+    # prevent overflow
+    max_entropy = 88.0
+    entropy = torch.clamp(entropy, max=max_entropy)
+    coefficient = 1 / torch.exp(entropy.clone().detach() - scaling_factor)
+    return coefficient, entropy
 
 def accuracy(output, target, topk=(1,)):
     """Computes the accuracy over the k top predictions for the specified values of k
