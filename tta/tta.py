@@ -42,30 +42,46 @@ class MEMLoss():
         return loss
 
 class MAELoss():
-    def __init__(self):
-        pass
-
-    def __call__(self, model, images, text_embeddings):
-        loss, reconstruction, mask = model.mae(images)
-        return loss
-
-class SelectionMAELoss():
     def __init__(self, selection_p=0.1):
         self._selection_p = selection_p
 
     def __call__(self, model, images, text_embeddings):
+        # [NOTE]: confidence selection
+        if self._selection_p != 1:
+            with torch.no_grad():
+                image_features = model.clip.image_encode(images)
+            image_features = image_features / image_features.norm(dim=-1, keepdim=True)
+            output = model.clip.logit_scale.exp() * (image_features @ text_embeddings)
+            _, selected_idx = select_confident_samples(output, self._selection_p)
+            images = images[selected_idx]
+
+        loss, reconstruction, mask = model.mae(images)
+        return loss
+
+
+class WeightedMAELoss():
+    def __init__(self, selection_p=0.1):
+        self._selection_p = selection_p
+
+    def __call__(self, model, images, text_embeddings):
+        # [NOTE]: confidence selection
         with torch.no_grad():
             image_features = model.clip.image_encode(images)
         image_features = image_features / image_features.norm(dim=-1, keepdim=True)
         output = model.clip.logit_scale.exp() * (image_features @ text_embeddings)
-        _, selected_idx = select_confident_samples(output, self._selection_p)
+        selected_logits, selected_idx = select_confident_samples(output, self._selection_p)
         images = images[selected_idx]
-        loss, reconstruction, mask = model.mae(images)
+
+        # [NOTE]: weight calculation
+        coefficient, _ = weighted_entropy(selected_logits)
+        loss, _, _ = model.mae(images, coefficient=coefficient)
+
         return loss
+
 
 from model.mae import PatchShuffle
 import torch.nn.functional as F
-class SelectionMAEConsistencyLoss():
+class MAEConsistencyLoss():
     def __init__(self, selection_p=0.1):
         self._selection_p = selection_p
         mask_ratio = 0.5
@@ -91,23 +107,12 @@ class SelectionMAEConsistencyLoss():
         loss = torch.mean(loss)
         return loss
 
+
 class MAEMEMLoss():
-    def __init__(self, mae_weight, mem_weight):
-        self._maew = mae_weight
-        self._memw = mem_weight
-        self._mae_loss = MAELoss()
-        self._mem_loss = MEMLoss()
-
-    def __call__(self, model, images, text_embeddings):
-        mem_loss = self._mem_loss(model, images, text_embeddings)
-        mae_loss = self._mae_loss(model, images, text_embeddings)
-        return (self._memw * mem_loss) + (self._maew * mae_loss)
-
-class SelectionMAEMEMLoss():
     def __init__(self, mae_weight, mem_weight, selection_p=0.1):
         self._maew = mae_weight
         self._memw = mem_weight
-        self._mae_loss = SelectionMAELoss(selection_p=selection_p)
+        self._mae_loss = MAELoss(selection_p=selection_p)
         self._mem_loss = MEMLoss(selection_p=selection_p)
 
     def __call__(self, model, images, text_embeddings):
@@ -134,14 +139,11 @@ class TTARunnerIF():
             self._amp = True
         elif isinstance(loss, MAELoss):
             self._loss = loss
-        elif isinstance(loss, SelectionMAELoss):
+        elif isinstance(loss, WeightedMAELoss):
             self._loss = loss
-        elif isinstance(loss, SelectionMAEConsistencyLoss):
+        elif isinstance(loss, MAEConsistencyLoss):
             self._loss = loss
         elif isinstance(loss, MAEMEMLoss):
-            self._amp = True
-            self._loss = loss
-        elif isinstance(loss, SelectionMAEMEMLoss):
             self._amp = True
             self._loss = loss
         else:
@@ -189,7 +191,6 @@ class TTARunner(TTARunnerIF):
                     if 'lora' in name:
                         param.requires_grad = True
             else:
-                # model.clip._image_projector.proj.weight.requires_grad = True
                 for i, layer in enumerate(model.image_encoder.transformer.layers):
                     if i in self._config.layers:
                         for name, param in layer.named_parameters():
@@ -687,6 +688,19 @@ def avg_entropy(outputs):
     min_real = torch.finfo(avg_logits.dtype).min
     avg_logits = torch.clamp(avg_logits, min=min_real)
     return -(avg_logits * torch.exp(avg_logits)).sum(dim=-1)
+
+def weighted_entropy(logits, scaling_factor=0.4):
+    log_probs = logits - logits.logsumexp(dim=-1, keepdim=True)			# torch.Size([N, C])
+    min_val = torch.finfo(log_probs.dtype).min
+    log_probs = torch.clamp(log_probs, min=min_val)
+    probs = torch.exp(log_probs)
+    entropy = -torch.sum(probs * log_probs, dim=1)
+
+    # prevent overflow
+    max_entropy = 88.0
+    entropy = torch.clamp(entropy, max=max_entropy)
+    coefficient = 1 / torch.exp(entropy.clone().detach() - scaling_factor)
+    return coefficient, entropy
 
 def accuracy(output, target, topk=(1,)):
     """Computes the accuracy over the k top predictions for the specified values of k

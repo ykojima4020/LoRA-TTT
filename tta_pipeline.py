@@ -18,7 +18,7 @@ from evaluator.evaluator import ZeroShotEvaluator
 from evaluator.imagenet_config import simple_prompts, ensemble_prompts, imagenet_classes
 from evaluator.imagenet_variant_config import imagenet_a_classes, imagenet_r_classes
 from tta import TTARunnerV2,  ParallelTTARunnerV2, ImageEncoderTTA, TextPromptTTA
-from tta import MAELoss, SelectionMAELoss, SelectionMAEConsistencyLoss, MEMLoss, MAEMEMLoss, SelectionMAEMEMLoss
+from tta import MAELoss, WeightedMAELoss, MAEConsistencyLoss, MEMLoss, MAEMEMLoss
 
 from misc.tpt_transforms import AugMixAugmenter
 from misc.logger import get_logger
@@ -229,19 +229,16 @@ def loss_selector(config):
         loss = MEMLoss(selection_p=config['selection_p'])
     elif loss == ['mae']:
         # [NOTE]: MAE for updating LoRA
-        loss = MAELoss()
-    elif loss == ['mae_selection']:
-        loss = SelectionMAELoss(selection_p=config['selection_p'])
-    elif loss == ['mae_selection_consis']:
-        loss = SelectionMAEConsistencyLoss(selection_p=config['selection_p'])
+        loss = MAELoss(selection_p=config['selection_p'])
+    elif loss == ['weighted_mae']:
+        loss = WeightedMAELoss(selection_p=config['selection_p'])
+    elif loss == ['mae_consis']:
+        loss = MAEConsistencyLoss(selection_p=config['selection_p'])
     elif loss == ['mae', 'mem']:
         # [NOTE]: MAE + MEM for updating LoRA
         loss = MAEMEMLoss(config['mae']['weight'],
-                          config['mem']['weight'])
-    elif loss == ['mae_selection', 'mem']:
-        loss = SelectionMAEMEMLoss(config['mae']['weight'],
-                                   config['mem']['weight'],
-                                   selection_p=config['selection_p'])
+                          config['mem']['weight'],
+                          selection_p=config['selection_p'])
     else:
         raise NotImplementedError
     return loss

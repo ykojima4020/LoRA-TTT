@@ -7,7 +7,7 @@ from transformers import CLIPModel, CLIPProcessor
 
 from model.clip import CLIP
 from model.modules import TextEncoder, ProjectionHead
-from model.mae import ImageEncoder, MAEPixelDecoder, MAEFeatureDecoder, PixelMAE, FeatureMAE, FeatureMAEWithoutDecoder
+from model.mae import ImageEncoder, MAEPixelDecoder, MAEFeatureDecoder, PixelMAE, CLSTokenMAE, CLSTokenMAEWithoutDecoder
 from model.mae_clip import MAECLIP
 
 from model.models_rils import RILSMAEEncoder
@@ -137,9 +137,9 @@ class PretrainedOpenCLIPFactory(Factory):
                 emb_dim=self._emb_dim, num_layer=self._decoder_layer,
                 num_head=self._decoder_head)
             if self._mae_decoder:
-                mae = FeatureMAE(image_encoder, image_decoder, self._mask_ratio)
+                mae = CLSTokenMAE(image_encoder, image_decoder, self._mask_ratio)
             else:
-                mae = FeatureMAEWithoutDecoder(image_encoder, None, self._mask_ratio)
+                mae = CLSTokenMAEWithoutDecoder(image_encoder, None, self._mask_ratio)
             print(f"{type(mae).__name__} is created.")
         else:
             raise TypeError(f'{self._mae_loss_type} is invalid.')
@@ -161,6 +161,11 @@ class PretrainedOpenCLIPFactory(Factory):
 class PretrainedHFOpenCLIPFactory(Factory):
     def __init__(self, cfg, tpt=False):
         # [NOTE]: need to create a decoder
+        self._vit_type = cfg.image.encoder.name
+        valid_type = ['vit-b', 'vit-l']
+        if self._vit_type not in valid_type:
+            raise ValueError(f'The value must be one of {valid_type}, but got {self._vit_type}')
+
         self._image_size = cfg.image.encoder.size
         self._patch_size = cfg.image.encoder.patch_size
         self._emb_dim = cfg.image.encoder.embeddings
@@ -178,13 +183,13 @@ class PretrainedHFOpenCLIPFactory(Factory):
         if 'peft' in cfg:
             self._peft = cfg.peft
 
-    def create(self, tpt=False, clip_type='B'):
+    def create(self, tpt=False):
 
         # [NOTE]: I don't know what kinds of dataset are used in the model.
-        if clip_type == 'B':
+        if self._vit_type == 'vit-b':
             hf_open_clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch16")
             processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch16")
-        elif clip_type == 'L':
+        elif self._vit_type == 'vit-l':
             hf_open_clip_model = CLIPModel.from_pretrained("openai/clip-vit-large-patch14")
             processor = CLIPProcessor.from_pretrained("openai/clip-vit-large-patch14")
         else:
@@ -203,11 +208,13 @@ class PretrainedHFOpenCLIPFactory(Factory):
             image_encoder = get_peft_model(image_encoder, config)
 
             # [NOTE]: Trainable LoRA scaling
+            '''
             for name, module in image_encoder.named_modules():
                 if 'lora_B.default' in name:
                     scaled_module = DynamicScaledLinear(self._peft.r, self._emb_dim)
                     parent_name = name.rsplit('.', 1)[0] if '.' in name else ''
                     setattr(dict(image_encoder.named_modules())[parent_name], name.rsplit('.', 1)[-1], scaled_module)
+            '''
         else:
             print(f'{self._peft.name} is not supported.')
 
@@ -232,9 +239,9 @@ class PretrainedHFOpenCLIPFactory(Factory):
                 emb_dim=self._emb_dim, num_layer=self._decoder_layer,
                 num_head=self._decoder_head)
             if self._mae_decoder:
-                mae = FeatureMAE(image_encoder, image_decoder, self._mask_ratio)
+                mae = CLSTokenMAE(image_encoder, image_decoder, self._mask_ratio)
             else:
-                mae = FeatureMAEWithoutDecoder(image_encoder, None, self._mask_ratio)
+                mae = CLSTokenMAEWithoutDecoder(image_encoder, None, self._mask_ratio)
             print(f"{type(mae).__name__} is created.")
         else:
             raise TypeError(f'{self._mae_loss_type} is invalid.')
@@ -249,7 +256,7 @@ class PretrainedHFOpenCLIPFactory(Factory):
         tokenizer = processor.tokenizer
         tokenizer = BertTokenizer(tokenizer)
 
-        # [TODO]: should be set transform designed for
+        # [NOTE]: the transform should be the same for ViT-B and ViT-L
         transform = get_open_clip_vitb16_transforms
         return model, tokenizer, transform
 
