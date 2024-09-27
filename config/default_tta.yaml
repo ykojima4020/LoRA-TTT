@@ -147,6 +147,9 @@ tta:
     selection_p: 0.1
     reset: true
     adaptive: false
+    norm: false
+    norm_layers: [10, 11]
+    norm_modules: ['layer_norm1', 'layer_norm2']
     mae:
       weight: 1
     mem:

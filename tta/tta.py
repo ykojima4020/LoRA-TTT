@@ -507,6 +507,14 @@ class ImageEncoderTTA(TTAHandlerIF):
                         if not 'lora' in name:
                             if 'self_attn' in name:
                                 param.requires_grad = True
+
+        if self.config.norm:
+            for i, layer in enumerate(self.model.image_encoder.transformer.layers):
+                if i in self.config.norm_layers:
+                    for name, param in layer.named_parameters():
+                        if any(s in name for s in self.config.norm_modules):
+                            param.requires_grad = True
+
         self.requires_grad_states = {name: param.requires_grad for name, param in self.model.named_parameters()}
 
         self.optimizer = build_tta_optimizer(self.model.image_encoder.parameters(), self.config)
