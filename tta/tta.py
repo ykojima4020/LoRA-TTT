@@ -273,7 +273,10 @@ class TTARunner(TTARunnerIF):
 
         return top1.avg.item(), top5.avg.item()
 
-
+from misc.seed_util import g
+def seed_worker(worker_id):
+    worker_seed = g.initial_seed() + worker_id
+    torch.manual_seed(worker_seed)
 
 class TTARunnerV2():
 
@@ -287,7 +290,7 @@ class TTARunnerV2():
 
         # [NOTE]: TTA preparation
         tta_data_loader = torch.utils.data.DataLoader(
-                    tta_dataset, batch_size=1, shuffle=True,
+                    tta_dataset, batch_size=1, shuffle=False, worker_init_fn=seed_worker, generator=g,
                     num_workers=num_workers, pin_memory=pin_memory)
 
         top1 = AverageMeter('Acc@1', ':6.2f', Summary.AVERAGE)
@@ -307,8 +310,8 @@ class TTARunnerV2():
             images = torch.cat(images, dim=0)
 
             self.tta.reset_model()
-            self.tta.update(images)
-            acc1, acc5 = self.tta.accuracy(image, target)
+            loss = self.tta.update(images)
+            acc1, acc5, _, _ = self.tta.accuracy(image, target)
 
             # measure accuracy and record loss
             top1.update(acc1[0], image.size(0))
@@ -563,7 +566,6 @@ class ImageEncoderTTA(TTAHandlerIF):
                 else:
                     target_score = None
                     max_score = None
-
         # measure accuracy and record loss
         acc1, acc5 = accuracy(output, target, topk=(1, 5))
         return acc1, acc5, target_score, max_score
