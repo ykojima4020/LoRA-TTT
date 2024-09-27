@@ -31,6 +31,13 @@ from tta_pipeline import run_tta
 
 import random
 
+from misc.seed_util import initialize_seed
+
+use_fixed_seed = True
+seed_value = 42
+
+initialize_seed(use_fixed_seed, seed_value)
+
 def get_args_parser():
     parser = argparse.ArgumentParser('Tuning hyper parameters used in LoRA for TTT', add_help=False)
     parser.add_argument('--cfg', type=str, required=True, help='path to a config file')

@@ -17,7 +17,8 @@ sys.path.append('../')
 from evaluator.evaluator import ZeroShotEvaluator
 from evaluator.imagenet_config import simple_prompts, ensemble_prompts, imagenet_classes
 from evaluator.imagenet_variant_config import imagenet_a_classes, imagenet_r_classes
-from tta import TTARunner, MAELoss, WeightedMAELoss, MAEConsistencyLoss, MEMLoss, MAEMEMLoss
+from tta import TTARunnerV2,  ParallelTTARunnerV2, ImageEncoderTTA, TextPromptTTA
+from tta import MAELoss, WeightedMAELoss, MAEConsistencyLoss, MEMLoss, MAEMEMLoss
 
 from misc.tpt_transforms import AugMixAugmenter
 from misc.logger import get_logger
@@ -51,10 +52,13 @@ def run_tta(factory, status, datasets, config):
     tta_transform = AugMixAugmenter(base_transform, preprocess, n_views=batch_size-1,
                                     augmix=False)
 
+    tta_runner = build_tta_runner(factory, status, config)
+
     datasets_stats = {}
     for name, dataset in datasets.items():
-        data_root = pathlib.Path(dataset['path'])
 
+        # dataset preparation
+        data_root = pathlib.Path(dataset['path'])
         if dataset['prompt'] == 'simple':
             prompts = simple_prompts
         elif dataset['prompt'] == 'ensemble':
@@ -76,49 +80,7 @@ def run_tta(factory, status, datasets, config):
             # [NOTE]: remove under bars in classes according to TPT or C-TPT.
             classes = [cls.replace('_', ' ') for cls in classes]
 
-
-        if all(param in ['tp', 'peft', 'ie'] for param in config.keys()):
-            raise NotImplementedError
-        elif any(param in ['tp'] for param in config.keys()):
-            loss = config['tp']['loss']
-            if ('mem' in loss) and not ('mae' in loss):
-                # [NOTE]: MEM for updating LoRA
-                loss = MEMLoss(tpt=True, selection_p=config['tp']['selection_p'])
-            else:
-                raise NotImplementedError
-            # [NOTE]: Choose Loss for Text Prompt here.
-            tta_runner = TTARunner(config['tp'], loss, tp=True)
-
-        elif any(param in ['peft'] for param in config.keys()):
-            # [NOTE]: Choose Loss for PEFT here.
-            loss = loss_selector(config['peft'])
-            tta_runner = TTARunner(config['peft'], loss, tp=False, lora=True)
-
-        elif any(param in ['ie'] for param in config.keys()):
-            # [NOTE]: Choose Loss for PEFT here.
-            loss = loss_selector(config['ie'])
-            tta_runner = TTARunner(config['ie'], loss, tp=False, lora=False)
-        else:
-            raise TypeError
-
-        logger.info(f'{type(tta_runner)} created.')
-
-        # [TODO]: first of all, calculate initial peformance before fine-tuning.
-        model, tokenizer, transform = factory.create()
-        model = model.to(device)
-
-        if 'imagenet' in dataset['classes']:
-            tta_test_dataset = torchvision.datasets.ImageFolder(root=data_root, transform=transform('val'))
-        elif dataset['classes'] == 'aircraft':
-            tta_test_dataset = Aircraft(data_root, 'test', None, transform('val'))
-        else:
-            tta_test_dataset = BaseJsonDataset(data_root, dataset['label'], 'test', None, transform('val'))
-
-        evaluator = ZeroShotEvaluator(tokenizer, tta_test_dataset, prompts, classes, device)
-        before_tta = evaluator(model.clip)
-        top1_before_tta = before_tta['eval']['imagenet']['top1']
-        top5_before_tta = before_tta['eval']['imagenet']['top5']
-        del model
+        top1_before_tta, top5_before_tta =  evaluate_before_tta(factory, data_root, dataset, classes, prompts)
 
         if 'imagenet' in dataset['classes']:
             tta_data = torchvision.datasets.ImageFolder(root=data_root, transform=tta_transform)
@@ -127,8 +89,7 @@ def run_tta(factory, status, datasets, config):
         else:
             tta_data = BaseJsonDataset(data_root, dataset['label'], 'test', None, tta_transform)
 
-        top1_after_tta, top5_after_tta = tta_runner(factory, status, tta_data,
-                                                    prompts, classes)
+        top1_after_tta, top5_after_tta = tta_runner(tta_data, classes, prompts)
 
         diff_top1 = top1_after_tta - top1_before_tta
         diff_top5 = top5_after_tta - top5_before_tta
@@ -161,6 +122,105 @@ def run_tta(factory, status, datasets, config):
                      'all': datasets_stats}}
     return stats
 
+
+def evaluate_before_tta(factory, data_root, dataset, classes, prompts, device='cuda'):
+
+    # [TODO]: first of all, calculate initial peformance before TTA.
+    model, tokenizer, transform = factory.create()
+    model = model.to(device)
+
+    if 'imagenet' in dataset['classes']:
+        tta_test_dataset = torchvision.datasets.ImageFolder(root=data_root, transform=transform('val'))
+    elif dataset['classes'] == 'aircraft':
+        tta_test_dataset = Aircraft(data_root, 'test', None, transform('val'))
+    else:
+        tta_test_dataset = BaseJsonDataset(data_root, dataset['label'], 'test', None, transform('val'))
+
+    evaluator = ZeroShotEvaluator(tokenizer, tta_test_dataset, prompts, classes, device)
+    before_tta = evaluator(model.clip)
+    top1_before_tta = before_tta['eval']['imagenet']['top1']
+    top5_before_tta = before_tta['eval']['imagenet']['top5']
+    del model
+    return top1_before_tta, top5_before_tta
+
+
+
+def build_tta_runner(factory, status, config, device='cuda'):
+
+    params = ['tp', 'peft', 'ie', 'tp_peft']
+    n = count_elements_in_list(list(config.keys()), params)
+    if n == 1:
+        logger.info('Single TTA.')
+        tta_runner = build_single_tta_runner(factory, status, config)
+    elif n == 2:
+        logger.info('Doble TTA.')
+        tta_runner = build_double_tta_runner(factory, status, config)
+    else:
+        logger.info('multiple TTA is not implemented.')
+        raise NotImplementedError
+    logger.info(f'{type(tta_runner)} created.')
+    return tta_runner
+
+def build_single_tta_runner(factory, status, config, device='cuda'):
+    model, tokenizer, _ = factory.create()
+    model = model.to(device)
+
+    if 'tp' in config.keys():
+        print(config['tp']['loss'])
+        if not config['tp']['loss'] == ['mem']:
+            logger.info('MEM is only used for TPT.')
+            raise NotImplementedError
+        # [NOTE]: Choose Loss for Text Prompt here.
+        loss = MEMLoss(tpt=True, selection_p=config['tp']['selection_p'])
+        handler = TextPromptTTA(model, tokenizer, status, loss, config['tp'])
+
+    elif 'peft' in config.keys():
+        # [NOTE]: Choose Loss for PEFT here.
+        loss = loss_selector(config['peft'])
+        handler = ImageEncoderTTA(model, tokenizer, status, loss, config['peft'], lora=True)
+
+    elif 'ie' in config.keys():
+        # [NOTE]: Choose Loss for PEFT here.
+        loss = loss_selector(config['ie'])
+        handler = ImageEncoderTTA(model, tokenizer, status, loss, config['ie'], lora=False)
+    elif 'tt_peft' in config.keys():
+        print('hoge')
+    else:
+        raise TypeError
+
+    tta_runner = TTARunnerV2(handler)
+    return tta_runner
+
+def build_double_tta_runner(factory, status, config, device='cuda'):
+    '''
+    This fucntion is only used for combination of TPT and ImageEncoder Tuning.
+    '''
+
+    model, tokenizer, _ = factory.create()
+    model = model.to(device)
+
+    if 'tp' in config.keys():
+        if not config['tp']['loss'] == ['mem']:
+            logger.info('MEM is only used for TPT.')
+            raise NotImplementedError
+        # [NOTE]: Choose Loss for Text Prompt here.
+        loss = MEMLoss(tpt=True, selection_p=config['tp']['selection_p'])
+        tp_tta_handler = TextPromptTTA(model, tokenizer, status, loss, config['tp'])
+    else:
+        raise TypeError
+
+    if 'peft' in config.keys():
+        # [NOTE]: Choose Loss for PEFT here.
+        loss = loss_selector(config['peft'])
+        ie_tta_handler = ImageEncoderTTA(model, tokenizer, status, loss, config['peft'], lora=True)
+    else:
+        raise TypeError
+
+    tta_runner = ParallelTTARunnerV2(tp_tta_handler, ie_tta_handler)
+    return tta_runner
+
+
+
 def loss_selector(config):
     loss = config['loss']
     loss = sorted(loss)
@@ -182,3 +242,8 @@ def loss_selector(config):
     else:
         raise NotImplementedError
     return loss
+
+
+def count_elements_in_list(main_list, sublist):
+    return sum(main_list.count(element) for element in sublist)
+

@@ -19,7 +19,7 @@ class ZeroShotEvaluator(Evaluator):
         if not isinstance(dataset, torch.utils.data.Dataset):
             raise TypeError('{} is not supported.'.format(type(dataset)))
 
-        self._loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, num_workers=num_workers)
+        self._loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, num_workers=num_workers, shuffle=False)
         self._device = device
         self._zeroshot_weights = None
         self._token_max_length = token_max_length
