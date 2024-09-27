@@ -33,7 +33,7 @@ import random
 
 from misc.seed_util import initialize_seed
 
-use_fixed_seed = True
+use_fixed_seed = False
 seed_value = 42
 
 initialize_seed(use_fixed_seed, seed_value)
