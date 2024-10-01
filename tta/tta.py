@@ -121,6 +121,29 @@ class MAEMEMLoss():
         return (self._memw * mem_loss) + (self._maew * mae_loss)
 
 
+class MAEMEMLossV2():
+    def __init__(self, mae_weight, mem_weight, selection_p=0.1):
+        self._maew = mae_weight
+        self._memw = mem_weight
+        self._selection_p = selection_p
+
+    def __call__(self, model, images, text_embeddings):
+
+        image_features = model.clip.image_encode(images)
+        image_features = image_features / image_features.norm(dim=-1, keepdim=True)
+        output = model.clip.logit_scale.exp() * (image_features @ text_embeddings)
+
+        loss_output, selected_idx = select_confident_samples(output, self._selection_p)
+        mem_loss = avg_entropy(loss_output)
+
+        images = images[selected_idx]
+        mae_loss, reconstruction, mask = model.mae(images)
+
+        loss = (self._memw * mem_loss) + (self._maew * mae_loss)
+
+        return loss
+
+
 from misc.seed_util import g
 def seed_worker(worker_id):
     worker_seed = g.initial_seed() + worker_id
@@ -315,6 +338,9 @@ class TTAHandlerIF():
             self.amp = True
             self.loss = loss
         elif isinstance(loss, MAEMEMLoss):
+            self.amp = True
+            self.loss = loss
+        elif isinstance(loss, MAEMEMLossV2):
             self.amp = True
             self.loss = loss
         else:

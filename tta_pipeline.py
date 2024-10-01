@@ -18,7 +18,7 @@ from evaluator.evaluator import ZeroShotEvaluator
 from evaluator.imagenet_config import simple_prompts, ensemble_prompts, imagenet_classes
 from evaluator.imagenet_variant_config import imagenet_a_classes, imagenet_r_classes
 from tta import TTARunner, ParallelTTARunner, ImageEncoderTTA, TextPromptTTA
-from tta import MAELoss, WeightedMAELoss, MAEConsistencyLoss, MEMLoss, MAEMEMLoss
+from tta import MAELoss, WeightedMAELoss, MAEConsistencyLoss, MEMLoss, MAEMEMLoss, MAEMEMLossV2
 
 from misc.tpt_transforms import AugMixAugmenter
 from misc.logger import get_logger
@@ -236,7 +236,7 @@ def loss_selector(config):
         loss = MAEConsistencyLoss(selection_p=config['selection_p'])
     elif loss == ['mae', 'mem']:
         # [NOTE]: MAE + MEM for updating LoRA
-        loss = MAEMEMLoss(config['mae']['weight'],
+        loss = MAEMEMLossV2(config['mae']['weight'],
                           config['mem']['weight'],
                           selection_p=config['selection_p'])
     else:
