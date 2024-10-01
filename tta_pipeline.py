@@ -17,7 +17,7 @@ sys.path.append('../')
 from evaluator.evaluator import ZeroShotEvaluator
 from evaluator.imagenet_config import simple_prompts, ensemble_prompts, imagenet_classes
 from evaluator.imagenet_variant_config import imagenet_a_classes, imagenet_r_classes
-from tta import TTARunnerV2,  ParallelTTARunnerV2, ImageEncoderTTA, TextPromptTTA
+from tta import TTARunner, ParallelTTARunner, ImageEncoderTTA, TextPromptTTA
 from tta import MAELoss, WeightedMAELoss, MAEConsistencyLoss, MEMLoss, MAEMEMLoss
 
 from misc.tpt_transforms import AugMixAugmenter
@@ -188,7 +188,7 @@ def build_single_tta_runner(factory, status, config, device='cuda'):
     else:
         raise TypeError
 
-    tta_runner = TTARunnerV2(handler)
+    tta_runner = TTARunner(handler)
     return tta_runner
 
 def build_double_tta_runner(factory, status, config, device='cuda'):
@@ -216,7 +216,7 @@ def build_double_tta_runner(factory, status, config, device='cuda'):
     else:
         raise TypeError
 
-    tta_runner = ParallelTTARunnerV2(tp_tta_handler, ie_tta_handler)
+    tta_runner = ParallelTTARunner(tp_tta_handler, ie_tta_handler)
     return tta_runner
 
 
