@@ -177,7 +177,8 @@ def build_single_tta_runner(factory, status, config, device='cuda'):
     elif 'peft' in config.keys():
         # [NOTE]: Choose Loss for PEFT here.
         loss = loss_selector(config['peft'])
-        handler = ImageEncoderTTA(model, tokenizer, status, loss, config['peft'], lora=True)
+        # handler = ImageEncoderTTA(model, tokenizer, status, loss, config['peft'], lora=True)
+        handler = TPTImageEncoderTTA(model, tokenizer, status, loss, config['peft'], lora=True)
 
     elif 'ie' in config.keys():
         # [NOTE]: Choose Loss for PEFT here.

@@ -118,6 +118,11 @@ class PromptLearner(nn.Module):
         # batch-wise prompt tuning for test-time adaptation
         if self.batch_size is not None: 
             ctx_vectors = ctx_vectors.repeat(batch_size, 1, 1)  #(N, L, D)
+
+        checkpoint = torch.load('/home/ykojima/Downloads/to_gdrive/vit_b16_ep50_16shots/nctx4_cscFalse_ctpend/seed1/prompt_learner/model.pth.tar-50', map_location='cpu')
+        ctx_vectors = checkpoint['state_dict']['ctx'].to(torch.float32)
+        print('ctx is loaded.')
+
         self.ctx_init_state = ctx_vectors.detach().clone()
         self.ctx = nn.Parameter(ctx_vectors) # to be optimized
 

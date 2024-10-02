@@ -26,17 +26,16 @@ def build_tta_optimizer(param, config):
     return optimizer
 
 class MEMLoss():
-    def __init__(self, tpt=False, selection_p=0.1):
+    def __init__(self, selection_p=0.1):
         self._selection_p = selection_p
-        self._tpt = tpt
 
     def __call__(self, model, images, text_embeddings):
-        if self._tpt:
-            output = model.clip(images)
-        else:
+        if text_embeddings:
             image_features = model.clip.image_encode(images)
             image_features = image_features / image_features.norm(dim=-1, keepdim=True)
             output = model.clip.logit_scale.exp() * (image_features @ text_embeddings)
+        else:
+            output = model.clip(images)
         loss_output, _ = select_confident_samples(output, self._selection_p)
         loss = avg_entropy(loss_output)
         return loss
@@ -49,9 +48,12 @@ class MAELoss():
         # [NOTE]: confidence selection
         if self._selection_p != 1:
             with torch.no_grad():
-                image_features = model.clip.image_encode(images)
-            image_features = image_features / image_features.norm(dim=-1, keepdim=True)
-            output = model.clip.logit_scale.exp() * (image_features @ text_embeddings)
+                if text_embeddings:
+                    image_features = model.clip.image_encode(images)
+                    image_features = image_features / image_features.norm(dim=-1, keepdim=True)
+                    output = model.clip.logit_scale.exp() * (image_features @ text_embeddings)
+                else:
+                    output = model.clip(images)
             _, selected_idx = select_confident_samples(output, self._selection_p)
             images = images[selected_idx]
 
@@ -441,6 +443,100 @@ class ImageEncoderTTA(TTAHandlerIF):
         return acc1, acc5, target_score, max_score
 
 
+class TPTImageEncoderTTA(TTAHandlerIF):
+
+    def __init__(self, model, tokenizer, status, loss, config, device='cuda', lora=True):
+        super().__init__(loss)
+        self.model = model.to(device)
+        self.tokenizer = tokenizer
+        self.status = status
+        self.config = config
+        self.device = device
+        self.lora = lora
+
+        if self.lora:
+            for name, param in self.model.image_encoder.named_parameters():
+                if 'lora' in name:
+                    param.requires_grad = True
+        else:
+            # model.clip._image_projector.proj.weight.requires_grad = True
+            for i, layer in enumerate(self.model.image_encoder.transformer.layers):
+                if i in self.config.layers:
+                    for name, param in layer.named_parameters():
+                        if not 'lora' in name:
+                            if 'self_attn' in name:
+                                param.requires_grad = True
+        self.requires_grad_states = {name: param.requires_grad for name, param in self.model.named_parameters()}
+
+        self.optimizer = build_tta_optimizer(self.model.image_encoder.parameters(), self.config)
+        self.optim_state = deepcopy(self.optimizer.state_dict())
+        # setup automatic mixed-precision (Amp) loss scaling
+        self.scaler = torch.GradScaler(init_scale=1000)
+
+        for name, param in model.named_parameters():
+            print(f'{name}: {param.requires_grad}')
+        trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        print(f'Trainable parameters: {trainable_params}')
+
+    def set_trainable(self):
+        for name, param in self.model.named_parameters():
+            param.requires_grad = self.requires_grad_states[name]
+
+    def set_freeze(self):
+        for name, param in self.model.named_parameters():
+            if self.requires_grad_states[name]: # 元々 True だったものだけ変更
+                param.requires_grad = False
+
+    def reset_dataset(self, classes, prompts, device='cuda'):
+        arch = 'ViT-B/16'
+        self.model.clip.reset_classnames(classes, arch)
+        self.text_embeddings = None
+
+        self.model = self.model.to(device)
+        self.model.eval()
+        with torch.no_grad():
+            self.model.clip.reset()
+
+    def reset_model(self):
+        self.model.mae.load_state_dict(self.status)
+
+    def reset_optim(self):
+        self.optimizer.load_state_dict(self.optim_state)
+
+    def update(self, images):
+        self.model.train()
+        loss = None
+        for j in range(self.config.epochs):
+            if self.config.reset:
+                self.reset_optim()
+            with torch.autocast(device_type='cuda', enabled=self.amp):
+                loss = self.loss(self.model, images, self.text_embeddings)
+            self.optimizer.zero_grad()
+            # compute gradient and do SGD step
+            self.scaler.scale(loss).backward()
+            # Unscales the gradients of optimizer's assigned params in-place
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
+        return loss
+
+    def accuracy(self, image, target, score=False):
+        # [NOTE]: inference
+        self.model.eval()
+        with torch.no_grad():
+            with torch.autocast(device_type='cuda', enabled=False):
+                output = self.model.clip(image)
+                if score:
+                    scores = (self.model.clip.logit_scale.exp() * output).softmax(dim=-1) # logit_scale.exp() is 100
+                    target_score = scores[0][target[0]]
+                    max_score = torch.max(scores[0])
+                else:
+                    target_score = None
+                    max_score = None
+        # measure accuracy and record loss
+        acc1, acc5 = accuracy(output, target, topk=(1, 5))
+        return acc1, acc5, target_score, max_score
+
+
 class TextPromptTTA(TTAHandlerIF):
 
     def __init__(self, model, tokenizer, status, loss, config, device='cuda'):
@@ -523,8 +619,6 @@ class TextPromptTTA(TTAHandlerIF):
         # measure accuracy and record loss
         acc1, acc5 = accuracy(output, target, topk=(1, 5))
         return acc1, acc5, target_score, max_score
-
-
 
 def test_time_tuning(clip, inputs, optimizer, scaler, config):
 

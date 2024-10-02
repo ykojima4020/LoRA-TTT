@@ -80,7 +80,7 @@ def process(rank, world_size, cfg):
         factory = PretrainedHFOpenCLIPFactory(cfg.model, tpt=True)
         logger.info('TPT enable.')
     else:
-        factory = PretrainedHFOpenCLIPFactory(cfg.model)
+        factory = PretrainedHFOpenCLIPFactory(cfg.model, tpt=cfg.fs.coop)
         logger.info('TPT disable.')
 
     model, tokenizer, transform = factory.create()

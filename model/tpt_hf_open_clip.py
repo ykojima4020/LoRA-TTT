@@ -100,8 +100,9 @@ class TPTHFOpenCLIP(nn.Module):
             return loss, logit_scale
 
         elif isinstance(batch, torch.Tensor):
-            with torch.no_grad():
-                image_features = self.image_encode(batch.type(self.dtype))
+            # with torch.no_grad():
+            #     image_features = self.image_encode(batch.type(self.dtype))
+            image_features = self.image_encode(batch.type(self.dtype))
             image_features = image_features / image_features.norm(dim=-1, keepdim=True)
             text_features = self.get_text_features()
             logit_scale = self.logit_scale.exp()
