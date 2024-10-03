@@ -331,17 +331,13 @@ class TTAHandlerIF():
         print(f"{type(loss).__name__} is used.")
         if isinstance(loss, MEMLoss):
             self.loss = loss
-            self.amp = True
         elif isinstance(loss, MAELoss):
             self.loss = loss
         elif isinstance(loss, MAEMEMLoss):
-            self.amp = True
             self.loss = loss
         elif isinstance(loss, MAEMEMLoss):
-            self.amp = True
             self.loss = loss
         elif isinstance(loss, MAEMEMLossV2):
-            self.amp = True
             self.loss = loss
         else:
             raise TypeError
