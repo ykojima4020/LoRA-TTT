@@ -216,6 +216,7 @@ def build_double_tta_runner(factory, status, config, device='cuda'):
     else:
         raise TypeError
 
+    # [NOTE]: should be TPT first,
     tta_runner = ParallelTTARunner(tp_tta_handler, ie_tta_handler)
     return tta_runner
 

@@ -223,8 +223,9 @@ class TTARunnerAnalyser():
 
         # [NOTE]: TTA preparation
         tta_data_loader = torch.utils.data.DataLoader(
-                    tta_dataset, batch_size=1, shuffle=False,
+                    tta_dataset, batch_size=1, shuffle=False, worker_init_fn=seed_worker, generator=g,
                     num_workers=num_workers, pin_memory=pin_memory)
+
 
         top1 = AverageMeter('Acc@1', ':6.2f', Summary.AVERAGE)
         top5 = AverageMeter('Acc@5', ':6.2f', Summary.AVERAGE)
@@ -276,7 +277,7 @@ class ParallelTTARunner():
 
         # [NOTE]: TTA preparation
         tta_data_loader = torch.utils.data.DataLoader(
-                    tta_dataset, batch_size=1, shuffle=True,
+                    tta_dataset, batch_size=1, shuffle=False, worker_init_fn=seed_worker, generator=g,
                     num_workers=num_workers, pin_memory=pin_memory)
 
         top1 = AverageMeter('Acc@1', ':6.2f', Summary.AVERAGE)
@@ -298,16 +299,16 @@ class ParallelTTARunner():
             self.tta_1.reset_model()
             self.tta_2.reset_model()
 
-            self.tta_1.set_freeze()
-            self.tta_2.set_trainable()
-            self.tta_2.update(images)
-
             self.tta_2.set_freeze()
             self.tta_1.set_trainable()
             self.tta_1.update(images)
 
+            self.tta_1.set_freeze()
+            self.tta_2.set_trainable()
+            self.tta_2.update(images)
+
             # [NOTE]: only tta 1 for accuracy
-            acc1, acc5 = self.tta_1.accuracy(image, target)
+            acc1, acc5, _, _ = self.tta_1.accuracy(image, target)
 
             # measure accuracy and record loss
             top1.update(acc1[0], image.size(0))
