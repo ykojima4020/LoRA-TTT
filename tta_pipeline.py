@@ -17,7 +17,7 @@ sys.path.append('../')
 from evaluator.evaluator import ZeroShotEvaluator
 from evaluator.imagenet_config import simple_prompts, ensemble_prompts, imagenet_classes
 from evaluator.imagenet_variant_config import imagenet_a_classes, imagenet_r_classes
-from tta import TTARunner, ParallelTTARunner, ImageEncoderTTA, TextPromptTTA
+from tta import TTARunner, ParallelTTARunner, ImageEncoderTTA, TextPromptTTA, MTA
 from tta import MAELoss, WeightedMAELoss, MAEConsistencyLoss, MEMLoss, MAEMEMLoss, MAEMEMLossV2
 
 from misc.tpt_transforms import AugMixAugmenter
@@ -166,13 +166,15 @@ def build_single_tta_runner(factory, status, config, device='cuda'):
     model = model.to(device)
 
     if 'tp' in config.keys():
-        print(config['tp']['loss'])
         if not config['tp']['loss'] == ['mem']:
             logger.info('MEM is only used for TPT.')
             raise NotImplementedError
         # [NOTE]: Choose Loss for Text Prompt here.
         loss = MEMLoss(tpt=True, selection_p=config['tp']['selection_p'])
-        handler = TextPromptTTA(model, tokenizer, status, loss, config['tp'])
+        if config['tp']['mta']:
+            handler = MTA(model, tokenizer, status, loss, config['tp'])
+        else:
+            handler = TextPromptTTA(model, tokenizer, status, loss, config['tp'])
 
     elif 'peft' in config.keys():
         # [NOTE]: Choose Loss for PEFT here.
@@ -188,6 +190,7 @@ def build_single_tta_runner(factory, status, config, device='cuda'):
     else:
         raise TypeError
 
+    logger.info(f'{type(handler)} created.')
     tta_runner = TTARunner(handler)
     return tta_runner
 

@@ -525,34 +525,79 @@ class TextPromptTTA(TTAHandlerIF):
         return acc1, acc5, target_score, max_score
 
 
+from tta.mta import solve_mta
+class MTA(TTAHandlerIF):
 
-def test_time_tuning(clip, inputs, optimizer, scaler, config):
+    def __init__(self, model, tokenizer, status, loss, config, device='cuda'):
+        super().__init__(loss)
+        self.model = model.to(device)
+        self.tokenizer = tokenizer
+        self.status = status
+        self.config = config
+        self.device = device
+        self.text_embeddings = None
+        self.output = None
 
-    # [NOTE]: fixed parameters for the reproduction
-    selection_p = 0.1
+        # [NOTE]: TPT
+        model.clip.prompt_learner.ctx.requires_grad = True
+        self.requires_grad_states = {name: param.requires_grad for name, param in self.model.named_parameters()}
+        trainable_param = model.clip.prompt_learner.parameters()
+        self.optimizer = build_tta_optimizer(trainable_param, self.config)
+        self.optim_state = deepcopy(self.optimizer.state_dict())
 
-    selected_idx = None
-    for j in range(config.epochs):
-        with torch.autocast():
-            clip = clip.to('cuda')
-            output = clip(inputs)
+        # setup automatic mixed-precision (Amp) loss scaling
+        self.scaler = torch.GradScaler(init_scale=1000)
 
-            if selected_idx is not None:
-                output = output[selected_idx]
-            else:
-                output, selected_idx = select_confident_samples(output, selection_p)
+        for name, param in model.named_parameters():
+            print(f'{name}: {param.requires_grad}')
+        trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        print(f'Trainable parameters: {trainable_params}')
 
-            loss = avg_entropy(output)
+    def set_trainable(self):
+        for name, param in self.model.named_parameters():
+            param.requires_grad = self.requires_grad_states[name]
 
-        optimizer.zero_grad()
-        # compute gradient and do SGD step
-        scaler.scale(loss).backward()
-        del loss
+    def set_freeze(self):
+        for name, param in self.model.named_parameters():
+            if self.requires_grad_states[name]: # 元々 True だったものだけ変更
+                param.requires_grad = False
 
-        # Unscales the gradients of optimizer's assigned params in-place
-        scaler.step(optimizer)
-        scaler.update()
-    return
+    def reset_dataset(self, classes, prompts, device='cuda'):
+        arch = 'ViT-B/16'
+        self.model.clip.reset_classnames(classes, arch)
+        self.text_embeddings = None
+
+        self.model = self.model.to(device)
+        self.model.eval()
+        with torch.no_grad():
+            self.model.clip.reset()
+
+    def reset_model(self):
+        with torch.no_grad():
+            self.model.clip.reset()
+
+    def reset_optim(self):
+        self.optimizer.load_state_dict(self.optim_state)
+
+    def update(self, images):
+        self.output = solve_mta(self.model, images)
+
+    def accuracy(self, image, target, score=False):
+        # [NOTE]: inference
+        self.model.eval()
+        with torch.no_grad():
+            with torch.autocast(device_type='cuda', enabled=False):
+                if score:
+                    scores = (self.model.clip.logit_scale.exp() * self.output).softmax(dim=-1) # logit_scale.exp() is 100
+                    target_score = scores[0][target[0]]
+                    max_score = torch.max(scores[0])
+                else:
+                    target_score = None
+                    max_score = None
+        # measure accuracy and record loss
+        acc1, acc5 = accuracy(self.output, target, topk=(1, 5))
+        return acc1, acc5, target_score, max_score
+
 
 def select_confident_samples(logits, top):
     batch_entropy = -(logits.softmax(1) * logits.log_softmax(1)).sum(1)
