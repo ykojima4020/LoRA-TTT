@@ -46,6 +46,7 @@ def get_args_parser():
     parser.add_argument('--finetune', action='store_true')
     parser.add_argument('--checkpoint', type=str, help='path to a pth file')
     parser.add_argument('--wandb', action='store_true')
+    parser.add_argument('--analyser', action='store_true')
     return parser
 
 def process(rank, world_size, cfg):
@@ -106,7 +107,7 @@ def process(rank, world_size, cfg):
         logger.info('initial weight')
 
     if not cfg.finetune:
-        stats = run_tta(factory, status['model'], tta_datasets, cfg.tta)
+        stats = run_tta(factory, status['model'], tta_datasets, cfg.tta, analyser=cfg.analyser)
         if cfg.wandb:
             wandb.log(stats)
         logger.info(stats)

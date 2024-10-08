@@ -40,6 +40,9 @@ def get_config(args):
     if hasattr(args, 'wandb') and args.wandb:
         cfg.wandb = args.wandb
 
+    if hasattr(args, 'analyser') and args.analyser:
+        cfg.analyser = args.analyser
+
     if hasattr(args, 'test') and args.test:
         cfg.test = args.test
 

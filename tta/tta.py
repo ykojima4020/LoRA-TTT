@@ -155,7 +155,7 @@ class TTARunner():
         # [NOTE]: tta_handler includes Image Encoder Tuning, LoRA, TPT, and both.
         self.tta = tta_handler
 
-    def __call__(self, tta_dataset, classes, prompts, num_workers=4, pin_memory=True, device='cuda'):
+    def __call__(self, tta_dataset, classes, prompts, dname=None, num_workers=4, pin_memory=True, device='cuda'):
 
         self.tta.reset_dataset(classes, prompts)
 
@@ -207,6 +207,8 @@ class TTARunnerAnalyser():
                 loss_type = 'mem'
             elif isinstance(self.tta.get_loss(), MAELoss):
                 loss_type = 'mae'
+            elif isinstance(self.tta.get_loss(), MAEMEMLossV2):
+                loss_type = 'mae_mem'
             else:
                 raise ValueError
             self.file_path = Path(f'./calib/{dname}_{loss_type}.txt')
@@ -225,7 +227,6 @@ class TTARunnerAnalyser():
         tta_data_loader = torch.utils.data.DataLoader(
                     tta_dataset, batch_size=1, shuffle=False, worker_init_fn=seed_worker, generator=g,
                     num_workers=num_workers, pin_memory=pin_memory)
-
 
         top1 = AverageMeter('Acc@1', ':6.2f', Summary.AVERAGE)
         top5 = AverageMeter('Acc@5', ':6.2f', Summary.AVERAGE)
@@ -270,7 +271,7 @@ class ParallelTTARunner():
         self.tta_1 = tta_handler_1
         self.tta_2 = tta_handler_2
 
-    def __call__(self, tta_dataset, classes, prompts, num_workers=4, pin_memory=True, device='cuda'):
+    def __call__(self, tta_dataset, classes, prompts, dname=None, num_workers=4, pin_memory=True, device='cuda'):
 
         self.tta_1.reset_dataset(classes, prompts)
         self.tta_2.reset_dataset(classes, prompts)
@@ -334,12 +335,6 @@ class TTAHandlerIF():
             self.loss = loss
             self.amp = True
         elif isinstance(loss, MAELoss):
-            self.loss = loss
-        elif isinstance(loss, MAEMEMLoss):
-            self.amp = True
-            self.loss = loss
-        elif isinstance(loss, MAEMEMLoss):
-            self.amp = True
             self.loss = loss
         elif isinstance(loss, MAEMEMLossV2):
             self.amp = True

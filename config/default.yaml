@@ -88,3 +88,4 @@ world_size: 1
 type: 'open'
 finetune: false
 checkpoint: false
+analyser: false
