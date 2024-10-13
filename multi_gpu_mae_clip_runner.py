@@ -113,6 +113,9 @@ def process(rank, world_size, cfg):
         logger.info(stats)
         return
 
+
+    run_validate = False
+    run_evaluate = False
     # [NOTE]: Start MAE fine-tuning
     logger.info('Run fine-tuning.')
     for name, param in model.image_encoder.named_parameters():
@@ -126,6 +129,9 @@ def process(rank, world_size, cfg):
     if dist.get_rank() == 0:
         for name, param in model.named_parameters():
             logger.info(f'{name}: {param.requires_grad}')
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    logger.info(f'Trainable parameters: {trainable_params}')
+
 
     ddp_model = DDP(model, device_ids=[rank], find_unused_parameters=True)
     model_without_ddp = ddp_model.module
@@ -148,9 +154,8 @@ def process(rank, world_size, cfg):
     if dist.get_rank() == 0:
         # [NOTE]: Metrics is ImageNetV2 here.
         dataset = ImageNetV2Dataset(transform=transform('valid')) 
-        evaluator = ZeroShotEvaluator(tokenizer, dataset, ensemble_prompts, imagenet_classes, rank)
+        evaluator = ZeroShotEvaluator(tokenizer, dataset, simple_prompts, imagenet_classes, rank)
 
-    logger.info('Start training')
     for epoch in range(cfg.train.start_epoch, cfg.train.epochs):
         dist.barrier()
         stats = {'epoch': epoch}
@@ -160,27 +165,25 @@ def process(rank, world_size, cfg):
         train_stats = trainer(ddp_model, loss, epoch)
         stats = stats | train_stats
 
-        ddp_model.eval()
-        with torch.no_grad():
-            valid_stats, image_table = validater(ddp_model)
-            stats = stats | valid_stats
+        if run_validate:
+            ddp_model.eval()
+            with torch.no_grad():
+                valid_stats, image_table = validater(ddp_model)
+                stats = stats | valid_stats
 
         # [NOTE]: evaluation, tta, and saving
         if dist.get_rank() == 0:
 
-            eval_stats = evaluator(ddp_model.module.clip)
-            stats = stats | eval_stats
+            if run_evaluate:
+                eval_stats = evaluator(ddp_model.module.clip)
+                stats = stats | eval_stats
 
             logger.info("Save Model!")
             checkpoint = os.path.join(cfg.output, f'checkpoint_{epoch:03}.pth')
-            metrics = {'val_loss': stats['valid']['mae_loss'],
-                       'acc_1': stats['eval']['imagenet']['top1'],
-                       'acc_5': stats['eval']['imagenet']['top5']}
             save_state = {
                 'model': model_without_ddp.mae.state_dict(),
                 'optimizer': optimizer.state_dict(),
                 'lr_scheduler': lr_scheduler.state_dict(),
-                'metrics': metrics,
                 'epoch': epoch,
                 'config': cfg
             }
@@ -200,7 +203,6 @@ def process(rank, world_size, cfg):
         if cfg.wandb and dist.get_rank() == 0:
             logger.info(stats)
             wandb.log(stats)
-            wandb.log({'image': image_table})
         dist.barrier()
         logger.info(stats)
 
