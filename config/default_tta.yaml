@@ -182,6 +182,7 @@ tta:
     selection_p: 0.1
     reset: true
     adaptive: false
+    ctpt: false
     mem:
       weight: 1
 

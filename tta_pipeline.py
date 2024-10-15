@@ -166,7 +166,6 @@ def build_single_tta_runner(factory, status, config, device='cuda', analyser=Fal
     model = model.to(device)
 
     if 'tp' in config.keys():
-        print(config['tp']['loss'])
         if not config['tp']['loss'] == ['mem']:
             logger.info('MEM is only used for TPT.')
             raise NotImplementedError
