@@ -162,7 +162,7 @@ class PretrainedHFOpenCLIPFactory(Factory):
     def __init__(self, cfg, tpt=False):
         # [NOTE]: need to create a decoder
         self._vit_type = cfg.image.encoder.name
-        valid_type = ['vit-b', 'vit-l']
+        valid_type = ['vit-b', 'vit-l', 'vit-tiny']
         if self._vit_type not in valid_type:
             raise ValueError(f'The value must be one of {valid_type}, but got {self._vit_type}')
 
@@ -192,6 +192,9 @@ class PretrainedHFOpenCLIPFactory(Factory):
         elif self._vit_type == 'vit-l':
             hf_open_clip_model = CLIPModel.from_pretrained("openai/clip-vit-large-patch14")
             processor = CLIPProcessor.from_pretrained("openai/clip-vit-large-patch14")
+        elif self._vit_type == 'vit-tiny':
+            hf_open_clip_model = CLIPModel.from_pretrained("wkcn/TinyCLIP-ViT-40M-32-Text-19M-LAION400M")
+            processor = CLIPProcessor.from_pretrained("wkcn/TinyCLIP-ViT-40M-32-Text-19M-LAION400M")
         else:
             raise NotImplementedError
 
