@@ -211,7 +211,18 @@ class TTARunnerAnalyser():
                 loss_type = 'mae_mem'
             else:
                 raise ValueError
-            self.file_path = Path(f'./calib/{dname}_{loss_type}.txt')
+
+            if isinstance(self.tta, TextPromptTTA):
+                if self.tta.ctpt:
+                    method = 'ctpt'
+                else:
+                    method = 'tpt'
+            elif isinstance(self.tta, ImageEncoderTTA):
+                method = 'lora' 
+            else:
+                raise ValueError
+
+            self.file_path = Path(f'./calib/{dname}_{method}_{loss_type}.txt')
         else:
             self.file_path = Path(f'analysis.txt')
 
@@ -447,6 +458,14 @@ class TextPromptTTA(TTAHandlerIF):
         self.config = config
         self.device = device
         self.text_embeddings = None
+        self.ctpt = config.ctpt
+
+        if self.ctpt:
+            print('C-TPT mode')
+            self.lambda_ = 50 # 20 for OOD
+            self.model.clip.l2_norm_cal = True
+        else:
+            self.model.clip.l2_norm_cal = False
 
         # [NOTE]: TPT
         model.clip.prompt_learner.ctx.requires_grad = True
@@ -496,12 +515,17 @@ class TextPromptTTA(TTAHandlerIF):
                 self.reset_optim()
             with torch.autocast(device_type='cuda', enabled=self.amp):
                 loss = self.loss(self.model, images, self.text_embeddings)
+
+            if self.ctpt:
+                loss += (-self.lambda_* self.model.clip.l2_norm_mean_training)
+
             self.optimizer.zero_grad()
             # compute gradient and do SGD step
             self.scaler.scale(loss).backward()
             # Unscales the gradients of optimizer's assigned params in-place
             self.scaler.step(self.optimizer)
             self.scaler.update()
+        return loss
 
     def accuracy(self, image, target, score=False):
         # [NOTE]: inference
@@ -510,7 +534,7 @@ class TextPromptTTA(TTAHandlerIF):
             with torch.autocast(device_type='cuda', enabled=False):
                 output = self.model.clip(image)
                 if score:
-                    scores = (self.model.clip.logit_scale.exp() * output).softmax(dim=-1) # logit_scale.exp() is 100
+                    scores = output.softmax(dim=-1)
                     target_score = scores[0][target[0]]
                     max_score = torch.max(scores[0])
                 else:

@@ -183,6 +183,7 @@ tta:
     reset: true
     adaptive: false
     mta: false
+    ctpt: false
     mem:
       weight: 1
 
