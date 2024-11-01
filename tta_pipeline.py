@@ -17,7 +17,7 @@ sys.path.append('../')
 from evaluator.evaluator import ZeroShotEvaluator
 from evaluator.imagenet_config import simple_prompts, ensemble_prompts, imagenet_classes
 from evaluator.imagenet_variant_config import imagenet_a_classes, imagenet_r_classes
-from tta import TTARunner, ParallelTTARunner, ImageEncoderTTA, TextPromptTTA
+from tta import TTARunner, TTARunnerAnalyser, ParallelTTARunner, ImageEncoderTTA, TextPromptTTA, TPTImageEncoderTTA, MTA
 from tta import MAELoss, WeightedMAELoss, MAEConsistencyLoss, MEMLoss, MAEMEMLoss, MAEMEMLossV2
 
 from misc.tpt_transforms import AugMixAugmenter
@@ -28,7 +28,7 @@ from external.TPT.data.cls_to_names import *
 
 logger = get_logger()
 
-def run_tta(factory, status, datasets, config):
+def run_tta(factory, status, datasets, config, analyser=False):
 
     diff_top1s = []
     diff_top5s = []
@@ -52,7 +52,7 @@ def run_tta(factory, status, datasets, config):
     tta_transform = AugMixAugmenter(base_transform, preprocess, n_views=batch_size-1,
                                     augmix=False)
 
-    tta_runner = build_tta_runner(factory, status, config)
+    tta_runner = build_tta_runner(factory, status, config, analyser=analyser)
 
     datasets_stats = {}
     for name, dataset in datasets.items():
@@ -89,7 +89,7 @@ def run_tta(factory, status, datasets, config):
         else:
             tta_data = BaseJsonDataset(data_root, dataset['label'], 'test', None, tta_transform)
 
-        top1_after_tta, top5_after_tta = tta_runner(tta_data, classes, prompts)
+        top1_after_tta, top5_after_tta = tta_runner(tta_data, classes, prompts, dname=name)
 
         diff_top1 = top1_after_tta - top1_before_tta
         diff_top5 = top5_after_tta - top5_before_tta
@@ -145,13 +145,13 @@ def evaluate_before_tta(factory, data_root, dataset, classes, prompts, device='c
 
 
 
-def build_tta_runner(factory, status, config, device='cuda'):
+def build_tta_runner(factory, status, config, device='cuda', analyser=False):
 
     params = ['tp', 'peft', 'ie', 'tp_peft']
     n = count_elements_in_list(list(config.keys()), params)
     if n == 1:
         logger.info('Single TTA.')
-        tta_runner = build_single_tta_runner(factory, status, config)
+        tta_runner = build_single_tta_runner(factory, status, config, analyser=analyser)
     elif n == 2:
         logger.info('Doble TTA.')
         tta_runner = build_double_tta_runner(factory, status, config)
@@ -161,18 +161,20 @@ def build_tta_runner(factory, status, config, device='cuda'):
     logger.info(f'{type(tta_runner)} created.')
     return tta_runner
 
-def build_single_tta_runner(factory, status, config, device='cuda'):
+def build_single_tta_runner(factory, status, config, device='cuda', analyser=False):
     model, tokenizer, _ = factory.create()
     model = model.to(device)
 
     if 'tp' in config.keys():
-        print(config['tp']['loss'])
         if not config['tp']['loss'] == ['mem']:
             logger.info('MEM is only used for TPT.')
             raise NotImplementedError
         # [NOTE]: Choose Loss for Text Prompt here.
         loss = MEMLoss(tpt=True, selection_p=config['tp']['selection_p'])
-        handler = TextPromptTTA(model, tokenizer, status, loss, config['tp'])
+        if config['tp']['mta']:
+            handler = MTA(model, tokenizer, status, loss, config['tp'])
+        else:
+            handler = TextPromptTTA(model, tokenizer, status, loss, config['tp'])
 
     elif 'peft' in config.keys():
         # [NOTE]: Choose Loss for PEFT here.
@@ -185,11 +187,15 @@ def build_single_tta_runner(factory, status, config, device='cuda'):
         loss = loss_selector(config['ie'])
         handler = ImageEncoderTTA(model, tokenizer, status, loss, config['ie'], lora=False)
     elif 'tt_peft' in config.keys():
-        print('hoge')
+        raise NotImplementedError
     else:
         raise TypeError
 
-    tta_runner = TTARunner(handler)
+    logger.info(f'{type(handler)} created.')
+    if analyser:
+        tta_runner = TTARunnerAnalyser(handler)
+    else:
+        tta_runner = TTARunner(handler)
     return tta_runner
 
 def build_double_tta_runner(factory, status, config, device='cuda'):
@@ -217,6 +223,7 @@ def build_double_tta_runner(factory, status, config, device='cuda'):
     else:
         raise TypeError
 
+    # [NOTE]: should be TPT first,
     tta_runner = ParallelTTARunner(tp_tta_handler, ie_tta_handler)
     return tta_runner
 

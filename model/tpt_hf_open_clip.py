@@ -105,6 +105,21 @@ class TPTHFOpenCLIP(nn.Module):
             image_features = self.image_encode(batch.type(self.dtype))
             image_features = image_features / image_features.norm(dim=-1, keepdim=True)
             text_features = self.get_text_features()
+
+            #[c-tpt] --------------------------------------------
+            if self.l2_norm_cal:
+                prompt_mean = text_features.mean(0)
+                feature_distance = text_features - prompt_mean
+                l2_norm = torch.linalg.norm(feature_distance, dim=-1)
+                l2_norm_mean = l2_norm.mean()
+
+                #for saving to csv file
+                self.l2_norm_mean = l2_norm_mean.item()
+
+                #for training
+                self.l2_norm_mean_training = l2_norm_mean
+            #-----------------------------------------------------
+
             logit_scale = self.logit_scale.exp()
             logits = logit_scale * image_features @ text_features.t()
             return logits

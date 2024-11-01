@@ -182,11 +182,16 @@ tta:
     selection_p: 0.1
     reset: true
     adaptive: false
+    mta: false
+    ctpt: false
     mem:
       weight: 1
 
   params: ['peft']
   run_freq: 1
+
+fs:
+  coop: true
 
 world_size: 1
 

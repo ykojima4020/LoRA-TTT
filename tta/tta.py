@@ -131,9 +131,12 @@ class MAEMEMLossV2():
 
     def __call__(self, model, images, text_embeddings):
 
-        image_features = model.clip.image_encode(images)
-        image_features = image_features / image_features.norm(dim=-1, keepdim=True)
-        output = model.clip.logit_scale.exp() * (image_features @ text_embeddings)
+        if text_embeddings:
+            image_features = model.clip.image_encode(images)
+            image_features = image_features / image_features.norm(dim=-1, keepdim=True)
+            output = model.clip.logit_scale.exp() * (image_features @ text_embeddings)
+        else:
+            output = model.clip(images)
 
         loss_output, selected_idx = select_confident_samples(output, self._selection_p)
         mem_loss = avg_entropy(loss_output)
@@ -157,7 +160,7 @@ class TTARunner():
         # [NOTE]: tta_handler includes Image Encoder Tuning, LoRA, TPT, and both.
         self.tta = tta_handler
 
-    def __call__(self, tta_dataset, classes, prompts, num_workers=4, pin_memory=True, device='cuda'):
+    def __call__(self, tta_dataset, classes, prompts, dname=None, num_workers=4, pin_memory=True, device='cuda'):
 
         self.tta.reset_dataset(classes, prompts)
 
@@ -209,9 +212,22 @@ class TTARunnerAnalyser():
                 loss_type = 'mem'
             elif isinstance(self.tta.get_loss(), MAELoss):
                 loss_type = 'mae'
+            elif isinstance(self.tta.get_loss(), MAEMEMLossV2):
+                loss_type = 'mae_mem'
             else:
                 raise ValueError
-            self.file_path = Path(f'./calib/{dname}_{loss_type}.txt')
+
+            if isinstance(self.tta, TextPromptTTA):
+                if self.tta.ctpt:
+                    method = 'ctpt'
+                else:
+                    method = 'tpt'
+            elif isinstance(self.tta, ImageEncoderTTA):
+                method = 'lora' 
+            else:
+                raise ValueError
+
+            self.file_path = Path(f'./calib/{dname}_{method}_{loss_type}.txt')
         else:
             self.file_path = Path(f'analysis.txt')
 
@@ -225,7 +241,7 @@ class TTARunnerAnalyser():
 
         # [NOTE]: TTA preparation
         tta_data_loader = torch.utils.data.DataLoader(
-                    tta_dataset, batch_size=1, shuffle=False,
+                    tta_dataset, batch_size=1, shuffle=False, worker_init_fn=seed_worker, generator=g,
                     num_workers=num_workers, pin_memory=pin_memory)
 
         top1 = AverageMeter('Acc@1', ':6.2f', Summary.AVERAGE)
@@ -271,14 +287,14 @@ class ParallelTTARunner():
         self.tta_1 = tta_handler_1
         self.tta_2 = tta_handler_2
 
-    def __call__(self, tta_dataset, classes, prompts, num_workers=4, pin_memory=True, device='cuda'):
+    def __call__(self, tta_dataset, classes, prompts, dname=None, num_workers=4, pin_memory=True, device='cuda'):
 
         self.tta_1.reset_dataset(classes, prompts)
         self.tta_2.reset_dataset(classes, prompts)
 
         # [NOTE]: TTA preparation
         tta_data_loader = torch.utils.data.DataLoader(
-                    tta_dataset, batch_size=1, shuffle=True,
+                    tta_dataset, batch_size=1, shuffle=False, worker_init_fn=seed_worker, generator=g,
                     num_workers=num_workers, pin_memory=pin_memory)
 
         top1 = AverageMeter('Acc@1', ':6.2f', Summary.AVERAGE)
@@ -300,16 +316,16 @@ class ParallelTTARunner():
             self.tta_1.reset_model()
             self.tta_2.reset_model()
 
-            self.tta_1.set_freeze()
-            self.tta_2.set_trainable()
-            self.tta_2.update(images)
-
             self.tta_2.set_freeze()
             self.tta_1.set_trainable()
             self.tta_1.update(images)
 
+            self.tta_1.set_freeze()
+            self.tta_2.set_trainable()
+            self.tta_2.update(images)
+
             # [NOTE]: only tta 1 for accuracy
-            acc1, acc5 = self.tta_1.accuracy(image, target)
+            acc1, acc5, _, _ = self.tta_1.accuracy(image, target)
 
             # measure accuracy and record loss
             top1.update(acc1[0], image.size(0))
@@ -335,12 +351,6 @@ class TTAHandlerIF():
             self.loss = loss
             self.amp = True
         elif isinstance(loss, MAELoss):
-            self.loss = loss
-        elif isinstance(loss, MAEMEMLoss):
-            self.amp = True
-            self.loss = loss
-        elif isinstance(loss, MAEMEMLoss):
-            self.amp = True
             self.loss = loss
         elif isinstance(loss, MAEMEMLossV2):
             self.amp = True
@@ -453,6 +463,7 @@ class TPTImageEncoderTTA(TTAHandlerIF):
         self.config = config
         self.device = device
         self.lora = lora
+        self.model.clip.l2_norm_cal = False
 
         if self.lora:
             for name, param in self.model.image_encoder.named_parameters():
@@ -547,6 +558,14 @@ class TextPromptTTA(TTAHandlerIF):
         self.config = config
         self.device = device
         self.text_embeddings = None
+        self.ctpt = config.ctpt
+
+        if self.ctpt:
+            print('C-TPT mode')
+            self.lambda_ = 50 # 20 for OOD
+            self.model.clip.l2_norm_cal = True
+        else:
+            self.model.clip.l2_norm_cal = False
 
         # [NOTE]: TPT
         model.clip.prompt_learner.ctx.requires_grad = True
@@ -596,12 +615,17 @@ class TextPromptTTA(TTAHandlerIF):
                 self.reset_optim()
             with torch.autocast(device_type='cuda', enabled=self.amp):
                 loss = self.loss(self.model, images, self.text_embeddings)
+
+            if self.ctpt:
+                loss += (-self.lambda_* self.model.clip.l2_norm_mean_training)
+
             self.optimizer.zero_grad()
             # compute gradient and do SGD step
             self.scaler.scale(loss).backward()
             # Unscales the gradients of optimizer's assigned params in-place
             self.scaler.step(self.optimizer)
             self.scaler.update()
+        return loss
 
     def accuracy(self, image, target, score=False):
         # [NOTE]: inference
@@ -610,7 +634,7 @@ class TextPromptTTA(TTAHandlerIF):
             with torch.autocast(device_type='cuda', enabled=False):
                 output = self.model.clip(image)
                 if score:
-                    scores = (self.model.clip.logit_scale.exp() * output).softmax(dim=-1) # logit_scale.exp() is 100
+                    scores = output.softmax(dim=-1)
                     target_score = scores[0][target[0]]
                     max_score = torch.max(scores[0])
                 else:
@@ -620,33 +644,80 @@ class TextPromptTTA(TTAHandlerIF):
         acc1, acc5 = accuracy(output, target, topk=(1, 5))
         return acc1, acc5, target_score, max_score
 
-def test_time_tuning(clip, inputs, optimizer, scaler, config):
 
-    # [NOTE]: fixed parameters for the reproduction
-    selection_p = 0.1
+from tta.mta import solve_mta
+class MTA(TTAHandlerIF):
 
-    selected_idx = None
-    for j in range(config.epochs):
-        with torch.autocast():
-            clip = clip.to('cuda')
-            output = clip(inputs)
+    def __init__(self, model, tokenizer, status, loss, config, device='cuda'):
+        super().__init__(loss)
+        self.model = model.to(device)
+        self.tokenizer = tokenizer
+        self.status = status
+        self.config = config
+        self.device = device
+        self.text_embeddings = None
+        self.output = None
 
-            if selected_idx is not None:
-                output = output[selected_idx]
-            else:
-                output, selected_idx = select_confident_samples(output, selection_p)
+        # [NOTE]: TPT
+        model.clip.prompt_learner.ctx.requires_grad = True
+        self.requires_grad_states = {name: param.requires_grad for name, param in self.model.named_parameters()}
+        trainable_param = model.clip.prompt_learner.parameters()
+        self.optimizer = build_tta_optimizer(trainable_param, self.config)
+        self.optim_state = deepcopy(self.optimizer.state_dict())
 
-            loss = avg_entropy(output)
+        # setup automatic mixed-precision (Amp) loss scaling
+        self.scaler = torch.GradScaler(init_scale=1000)
 
-        optimizer.zero_grad()
-        # compute gradient and do SGD step
-        scaler.scale(loss).backward()
-        del loss
+        for name, param in model.named_parameters():
+            print(f'{name}: {param.requires_grad}')
+        trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        print(f'Trainable parameters: {trainable_params}')
 
-        # Unscales the gradients of optimizer's assigned params in-place
-        scaler.step(optimizer)
-        scaler.update()
-    return
+    def set_trainable(self):
+        for name, param in self.model.named_parameters():
+            param.requires_grad = self.requires_grad_states[name]
+
+    def set_freeze(self):
+        for name, param in self.model.named_parameters():
+            if self.requires_grad_states[name]: # 元々 True だったものだけ変更
+                param.requires_grad = False
+
+    def reset_dataset(self, classes, prompts, device='cuda'):
+        arch = 'ViT-B/16'
+        self.model.clip.reset_classnames(classes, arch)
+        self.text_embeddings = None
+
+        self.model = self.model.to(device)
+        self.model.eval()
+        with torch.no_grad():
+            self.model.clip.reset()
+
+    def reset_model(self):
+        with torch.no_grad():
+            self.model.clip.reset()
+
+    def reset_optim(self):
+        self.optimizer.load_state_dict(self.optim_state)
+
+    def update(self, images):
+        self.output = solve_mta(self.model, images)
+
+    def accuracy(self, image, target, score=False):
+        # [NOTE]: inference
+        self.model.eval()
+        with torch.no_grad():
+            with torch.autocast(device_type='cuda', enabled=False):
+                if score:
+                    scores = (self.model.clip.logit_scale.exp() * self.output).softmax(dim=-1) # logit_scale.exp() is 100
+                    target_score = scores[0][target[0]]
+                    max_score = torch.max(scores[0])
+                else:
+                    target_score = None
+                    max_score = None
+        # measure accuracy and record loss
+        acc1, acc5 = accuracy(self.output, target, topk=(1, 5))
+        return acc1, acc5, target_score, max_score
+
 
 def select_confident_samples(logits, top):
     batch_entropy = -(logits.softmax(1) * logits.log_softmax(1)).sum(1)
