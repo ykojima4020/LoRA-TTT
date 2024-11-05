@@ -19,6 +19,11 @@ def random_indexes(size : int):
     backward_indexes = np.argsort(forward_indexes) # return indexes of the sorted tensor
     return forward_indexes, backward_indexes
 
+def eff_random_indexes(size: int, batch_size: int, device):
+    forward_indexes = torch.stack([torch.randperm(size, device=device) for _ in range(batch_size)], dim=1)
+    backward_indexes = torch.argsort(forward_indexes, dim=0)
+    return forward_indexes, backward_indexes
+
 def take_indexes(sequences, indexes):
     return torch.gather(sequences, 0, repeat(indexes, 't b -> t b c', c=sequences.shape[-1]))
 
@@ -36,9 +41,11 @@ class PatchShuffle(torch.nn.Module):
         T, B, C = patches.shape
         remain_T = int(T * (1 - self.ratio))
 
-        indexes = [random_indexes(T) for _ in range(B)]
-        forward_indexes = torch.as_tensor(np.stack([i[0] for i in indexes], axis=-1), dtype=torch.long).to(patches.device)	# torch.Size([196, B])
-        backward_indexes = torch.as_tensor(np.stack([i[1] for i in indexes], axis=-1), dtype=torch.long).to(patches.device)	# torch.Size([196, B])
+        # indexes = [random_indexes(T) for _ in range(B)]
+        # forward_indexes = torch.as_tensor(np.stack([i[0] for i in indexes], axis=-1), dtype=torch.long).to(patches.device)	# torch.Size([196, B])
+        # backward_indexes = torch.as_tensor(np.stack([i[1] for i in indexes], axis=-1), dtype=torch.long).to(patches.device)	# torch.Size([196, B])
+        # 適切なデバイス上でインデックスを一括生成
+        forward_indexes, backward_indexes = eff_random_indexes(T, B, patches.device)
 
         patches = take_indexes(patches, forward_indexes)	# torch.Size([196, B, 768])
         patches = patches[:remain_T]				# torch.Size([49, B, 768])

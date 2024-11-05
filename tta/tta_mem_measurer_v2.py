@@ -239,7 +239,3 @@ class TextPromptTTAMeasurer(TTAHandlerIF):
         print(self.after_forward_mem)
         print(self.before_backward_mem)
         print(self.after_backward_mem)
-
-
-
-

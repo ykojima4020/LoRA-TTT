@@ -183,8 +183,6 @@ def build_single_tta_runner(factory, status, config, device='cuda'):
         # [NOTE]: Choose Loss for PEFT here.
         loss = loss_selector(config['ie'])
         handler = ImageEncoderTTAMeasurer(factory, status, loss, config['ie'], lora=False)
-    elif 'tt_peft' in config.keys():
-        print('hoge')
     else:
         raise TypeError
 
