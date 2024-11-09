@@ -170,7 +170,7 @@ def build_single_tta_runner(factory, status, config, device='cuda', analyser=Fal
             logger.info('MEM is only used for TPT.')
             raise NotImplementedError
         # [NOTE]: Choose Loss for Text Prompt here.
-        loss = MEMLoss(tpt=True, selection_p=config['tp']['selection_p'])
+        loss = MEMLoss(selection_p=config['tp']['selection_p'])
         if config['tp']['mta']:
             handler = MTA(model, tokenizer, status, loss, config['tp'])
         else:
@@ -210,7 +210,7 @@ def build_double_tta_runner(factory, status, config, device='cuda'):
             logger.info('MEM is only used for TPT.')
             raise NotImplementedError
         # [NOTE]: Choose Loss for Text Prompt here.
-        loss = MEMLoss(tpt=True, selection_p=config['tp']['selection_p'])
+        loss = MEMLoss(selection_p=config['tp']['selection_p'])
         tp_tta_handler = TextPromptTTA(model, tokenizer, status, loss, config['tp'])
     else:
         raise TypeError

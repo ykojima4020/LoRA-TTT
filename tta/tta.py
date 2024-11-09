@@ -26,17 +26,16 @@ def build_tta_optimizer(param, config):
     return optimizer
 
 class MEMLoss():
-    def __init__(self, tpt=False, selection_p=0.1):
+    def __init__(self, selection_p=0.1):
         self._selection_p = selection_p
-        self._tpt = tpt
 
     def __call__(self, model, images, text_embeddings):
-        if self._tpt:
-            output = model.clip(images)
-        else:
+        if text_embeddings is not None:
             image_features = model.clip.image_encode(images)
             image_features = image_features / image_features.norm(dim=-1, keepdim=True)
             output = model.clip.logit_scale.exp() * (image_features @ text_embeddings)
+        else:
+            output = model.clip(images)
         loss_output, _ = select_confident_samples(output, self._selection_p)
         loss = avg_entropy(loss_output)
         return loss
@@ -414,6 +413,7 @@ class ImageEncoderTTA(TTAHandlerIF):
         self.optimizer.load_state_dict(self.optim_state)
 
     def update(self, images):
+        loss = None
         self.model.train()
         for j in range(self.config.epochs):
             if self.config.reset:
@@ -509,6 +509,7 @@ class TextPromptTTA(TTAHandlerIF):
         self.optimizer.load_state_dict(self.optim_state)
 
     def update(self, images):
+        loss = None
         self.model.train()
         for j in range(self.config.epochs):
             if self.config.reset:
