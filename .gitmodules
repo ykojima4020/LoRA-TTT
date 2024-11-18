@@ -1,7 +1,3 @@
-[submodule "external/robustness"]
-	path = external/robustness
-	url = https://github.com/hendrycks/robustness.git
-        ignore = dirty
 [submodule "external/TPT"]
 	path = external/TPT
 	url = https://github.com/azshue/TPT.git

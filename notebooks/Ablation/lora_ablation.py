@@ -21,11 +21,16 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 sys.path.append('../')
-from wandb_adapter import runs_params_formatter, average_duplicate_rows
+from wandb_adapter import runs_params_formatter, basic_formatter
+# -
+
+loss_mapping = {"['mae']": 'MAE',
+                "['mem']": 'MEM'}
 
 # +
 # select sweep_id
 sweep_ids = ['<entitiy>/<project>/<sweep id>']
+sweep_ids = ['ykojima/mae_clip_mem_lora_without_finetune/zeireekk']
 
 runs = []
 for sid in sweep_ids:
@@ -35,46 +40,67 @@ for sid in sweep_ids:
 print(len(runs))
 # -
 
-sweep_summary = runs_params_formatter(runs)
+metric = ['tta.all.imagenet_a.top1_after_tta',
+          'tta.all.imagenetv2.top1_after_tta',
+          'tta.all.imagenet.top1_after_tta',
+          'tta.all.imagenet_r.top1_after_tta',
+          'tta.all.imagenet_sketch.top1_after_tta']
+runs_summary = runs_params_formatter(runs)
+df = basic_formatter(runs_summary, metric)
 
 # +
-# ablation_parameters
-metric = 'tta.all.imagenet_a.top1_after_tta'
+loss = df['tta.peft.loss'][:1][0]
+loss_label = loss_mapping[str(loss)]
+modules_label = 'kvqo'
 
-p = ['name', 'model.peft.r', 'model.peft.target_modules', 'reconst', metric]
-df = sweep_summary[p]
-print(f'number of total runs: {len(df)}')
+categories = {'tta.all.imagenet_a.top1_after_tta': 'ImageNet-A',
+              'tta.all.imagenet_r.top1_after_tta': 'ImageNet-R',
+              'tta.all.imagenet_sketch.top1_after_tta': 'ImageNet-Sketch',
+              'tta.all.imagenet.top1_after_tta': 'ImageNet-Val',
+              'tta.all.imagenetv2.top1_after_tta': 'ImageNet-V2'}
 
-# name to order
-order_mapping = {'k_proj+v_proj+q_proj+out_proj': 'kvqo', 'v_proj+q_proj': 'vq', 'q_proj': 'q'}
-df['model.peft.target_modules'] = df['model.peft.target_modules'].map(order_mapping)
-order_mapping = {'kvqo': 1, 'vq': 2, 'q': 3}
-df['model.peft.target_modules'] = df['model.peft.target_modules'].map(order_mapping)
-
-df[metric] = df[metric].astype(float)
-
-# df = average_duplicate_rows(df, ['model.peft.r', 'model.peft.target_modules', 'reconst'], 'best_ttt_enhancement')
-df = df.sort_values(by=['model.peft.r', 'model.peft.target_modules'])
-print(f'number of unique runs: {len(df)}')
-
-# +
-reconst = 'pixel' # pixel or feature
-metrix_label = 'ImageNet-A Top1 Accuracy'
-
-target = df[(df['reconst'] == reconst)]
-
-# rank vs ttt_enhancement
 fig, ax = plt.subplots()
-
-for k,v in order_mapping.items():
-    tmp = target[target['model.peft.target_modules'] == v]
-    ax.plot(tmp['model.peft.r'], tmp[metric], 'o-', label=f'LoRA modules = {k}')
-ax.axhline(64.06, linestyle='-.', color='red', alpha=0.5, label='ZERO (SOTA)')
-ax.set_ylabel(metrix_label)
+for k,v in categories.items():
+    tmp = df.dropna(subset=[k])
+    ax.plot(tmp['model.peft.r'], tmp[k], 'o-', label=v)
+ax.set_ylabel('Top1')
+ax.set_ylim(45, 95)
 ax.set_xlabel('LoRA rank')
-ax.set_ylim(45,70)
-ax.set_title(reconst)
-plt.legend()
-# -
+ax.set_title(f'TTA Loss={loss_label} without fine-tuning, LoRA scale=2, modules={modules_label}')
+plt.legend(loc='upper right', fontsize=8)
 
+# +
+# select sweep_id
+sweep_ids = ['<entitiy>/<project>/<sweep id>']
+sweep_ids = ['ykojima/mae_clip_mem_lora_without_finetune/dyay6ue6']
+
+runs = []
+for sid in sweep_ids:
+    api = wandb.Api()
+    sweep = api.sweep(sid)
+    runs.extend(list(sweep.runs))
+runs_summary = runs_params_formatter(runs)
+df = basic_formatter(runs_summary, metric)
+
+# +
+loss = df['tta.peft.loss'][:1][0]
+loss_label = loss_mapping[str(loss)]
+modules_label = 'kvqo'
+
+categories = {'tta.all.imagenet_a.top1_after_tta': 'ImageNet-A',
+              'tta.all.imagenet_r.top1_after_tta': 'ImageNet-R',
+              'tta.all.imagenet_sketch.top1_after_tta': 'ImageNet-Sketch',
+              'tta.all.imagenet.top1_after_tta': 'ImageNet-Val',
+              'tta.all.imagenetv2.top1_after_tta': 'ImageNet-V2'}
+
+fig, ax = plt.subplots()
+for k,v in categories.items():
+    tmp = df.dropna(subset=[k])
+    ax.plot(tmp['model.peft.r'], tmp[k], 'o-', label=v)
+ax.set_ylabel('Top1')
+ax.set_ylim(45, 95)
+ax.set_xlabel('LoRA rank')
+ax.set_title(f'TTA Loss={loss_label} without fine-tuning, LoRA scale=2, modules={modules_label}')
+plt.legend(loc='upper right', fontsize=8)
+# -
 

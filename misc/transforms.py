@@ -5,7 +5,6 @@ import open_clip
 import numpy as np
 
 import sys
-sys.path.append('../external/robustness/ImageNet-C/imagenet_c')
 from imagenet_c import corrupt
 
 def get_original_vit_image_encoder_transforms(mode):

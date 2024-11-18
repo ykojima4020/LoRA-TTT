@@ -37,6 +37,7 @@ class HFOpenCLIPImageEncoder(nn.Module):
              x, forward_indexes, backward_indexes = shuffler(x)
              x = rearrange(x, 't b c -> b t c')
         else:
+             forward_indexes = None
              backward_indexes = None
 
         cls_token_pos = self.cls_token + self.pos_embedding[0]			# torch.Size([768])
@@ -49,7 +50,7 @@ class HFOpenCLIPImageEncoder(nn.Module):
         x = self.ln_post(x)							# -> torch.Size([B, 197, 768]
 
         x = rearrange(x, 'b t c -> t b c')
-        return x, backward_indexes
+        return x, forward_indexes, backward_indexes
 
 class HFOpenCLIPImageProjector(nn.Module):
     def __init__(self, model):
@@ -63,7 +64,7 @@ class HFOpenCLIPImageProjector(nn.Module):
 
 
 class HFOpenCLIP(nn.Module):
-    def __init__(self, image_encoder=None, image_projector=None, clip=None, temperature=0.07):
+    def __init__(self, image_encoder=None, image_projector=None, clip=None):
         super().__init__()
         if not isinstance(clip, transformers.models.clip.modeling_clip.CLIPModel):
             raise TypeError
@@ -71,9 +72,7 @@ class HFOpenCLIP(nn.Module):
         self._image_projector = image_projector
         self.clip = clip
 
-        self._temperature = temperature
         self.logit_scale = clip.logit_scale 
-        # self.logit_scale = nn.Parameter(torch.ones([]) *  self._temperature)
         self.cross_entropy = nn.CrossEntropyLoss()
 
     def loss(self, image_x, text_x):
@@ -95,9 +94,9 @@ class HFOpenCLIP(nn.Module):
         loss = 0.5 * (loss_img + loss_text)
         return loss, logit_scale
 
-    def image_encode(self, image):
+    def image_encode(self, image, shuffler=None):
         # Getting Image and Text Features
-        image_features = self._image_encoder(image)[0][0, :, :]
+        image_features = self._image_encoder(image, shuffler=shuffler)[0][0, :, :]
         image_embeddings = self._image_projector(image_features)
         return image_embeddings 
 

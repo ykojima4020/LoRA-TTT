@@ -4,6 +4,30 @@ from torch import nn
 from tqdm import tqdm
 from misc.utils import AvgMeter, get_lr
 
+
+class Loss():
+    def __init__(self, clip_weight=1, mae_weight=1):
+        self._clipw = clip_weight
+        self._maew = mae_weight
+
+    def __call__(self, model, batch):
+        if self._clipw and self._maew:
+            clip_loss, logit_scale = model.module.clip(batch)
+            mae_loss, reconstruction, mask = model.module.mae(batch['image'])
+            loss = (self._clipw*clip_loss) + (self._maew*mae_loss)
+        elif self._clipw:
+            clip_loss, logit_scale = model.module.clip(batch)
+            loss = clip_loss
+            mae_loss = torch.tensor(0, requires_grad=False)
+        elif self._maew:
+            mae_loss, reconstruction, mask = model.module.mae(batch['image'])
+            loss = mae_loss
+            clip_loss = torch.tensor(0, requires_grad=False)
+        else:
+            raise NotImplementedError
+
+        return loss, clip_loss, mae_loss
+
 class Trainer():
 
     def __init__(self):
@@ -22,7 +46,7 @@ class SimpleTrainer(Trainer):
         self._lr_scheduler = lr_scheduler
         self._device = device
 
-        self._scaler = torch.cuda.amp.GradScaler()
+        self._scaler = torch.GradScaler()
         self._grad_norm = grad_norm
 
     def _reset(self):
@@ -30,25 +54,25 @@ class SimpleTrainer(Trainer):
         self._clip_loss_meter = AvgMeter()
         self._mae_loss_meter = AvgMeter()
 
-    def __call__(self, model, epoch):
+    def __call__(self, model, loss, epoch):
         self._reset()
         tqdm_object = tqdm(self._data_loader, total=len(self._data_loader))
         for idx, batch in enumerate(tqdm_object):
             self._optimizer.zero_grad()
             batch = {k: v.to(self._device) for k, v in batch.items() if k != "caption"}
 
-            with torch.autocast(device_type='cuda'):
-                loss, clip_loss, mae_loss, _, _ = model(batch)
-            self._scaler.scale(loss).backward()
-
+            with torch.autocast(enabled=True, device_type='cuda'):
+                total_loss, clip_loss, mae_loss = loss(model, batch)
+            self._scaler.scale(total_loss).backward()
             self._scaler.unscale_(self._optimizer)
+
             nn.utils.clip_grad_norm_(model.parameters(), self._grad_norm)
             self._scaler.step(self._optimizer)
             self._scaler.update()
             self._lr_scheduler.step_update(epoch * self._num_steps + idx)
 
             count = batch["image"].size(0)
-            self._loss_meter.update(loss.item(), count)
+            self._loss_meter.update(total_loss.item(), count)
             self._clip_loss_meter.update(clip_loss.item(), count)
             self._mae_loss_meter.update(mae_loss.item(), count)
     

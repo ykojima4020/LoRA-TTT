@@ -1,6 +1,5 @@
 import os
 import sys
-from tqdm import tqdm
 import pathlib
 import argparse
 import wandb
@@ -13,12 +12,12 @@ import torch.multiprocessing as mp
 from imagenetv2_pytorch import ImageNetV2Dataset
 import numpy as np
 
-from omegaconf import OmegaConf, read_write
+from omegaconf import OmegaConf
 
 sys.path.append('../')
 from factory import PretrainedHFOpenCLIPFactory
 from data.dataloader_builder import CLIPDataLoaderBuilder, GCC3MDataLoaderBuilder
-from trainer.trainer import SimpleTrainer
+from trainer.trainer import SimpleTrainer, Loss
 from trainer.validater import SimpleValidater
 from evaluator.evaluator import ZeroShotEvaluator
 from evaluator.imagenet_config import simple_prompts, ensemble_prompts, imagenet_classes
@@ -32,15 +31,22 @@ from tta_pipeline import run_tta
 
 import random
 
+from misc.seed_util import initialize_seed
+
+use_fixed_seed = False
+seed_value = 42
+
+initialize_seed(use_fixed_seed, seed_value)
+
 def get_args_parser():
     parser = argparse.ArgumentParser('Tuning hyper parameters used in LoRA for TTT', add_help=False)
     parser.add_argument('--cfg', type=str, required=True, help='path to a config file')
-    parser.add_argument('--reconst', choices=['pixel', 'feature'], help='a kind of reconstruction')
     parser.add_argument('--opts', help="Modify config options by adding 'KEY=VALUE' list. ", default=None, nargs='+')
     parser.add_argument('--test', action='store_true')
     parser.add_argument('--finetune', action='store_true')
     parser.add_argument('--checkpoint', type=str, help='path to a pth file')
     parser.add_argument('--wandb', action='store_true')
+    parser.add_argument('--analyser', action='store_true')
     return parser
 
 def process(rank, world_size, cfg):
@@ -71,10 +77,15 @@ def process(rank, world_size, cfg):
         logger.info(cfg)
 
     # [NOTE]: factory used in this script is only for Hugging Face.
-    factory = PretrainedHFOpenCLIPFactory(cfg.model, mae=cfg.reconst)
+    if 'tp' in cfg.tta['params']:
+        factory = PretrainedHFOpenCLIPFactory(cfg.model, tpt=True)
+        logger.info('TPT enable.')
+    else:
+        factory = PretrainedHFOpenCLIPFactory(cfg.model)
+        logger.info('TPT disable.')
+
     model, tokenizer, transform = factory.create()
     model = model.to(rank)
-
 
     tta_datasets = {}
     for ds in cfg.data.dataset['tta']:
@@ -84,21 +95,29 @@ def process(rank, world_size, cfg):
     tta_config = {}
     for m in cfg.tta['params']:
         tta_config[m] = cfg.tta[m]
+    tta_config['run_freq'] = cfg.tta.run_freq
     cfg.tta = OmegaConf.create(tta_config)
 
+    if cfg.checkpoint:
+        status = torch.load(cfg.checkpoint, map_location=cfg.device)
+        model.mae.load_state_dict(status['model'])
+        logger.info(f'{cfg.checkpoint} loaded.')
+    else:
+        status = {'model': model.mae.state_dict()}
+        logger.info('initial weight')
+
     if not cfg.finetune:
-        if cfg.checkpoint:
-            status = torch.load(cfg.checkpoint, map_location=cfg.device)
-        else:
-            status = {'model': model.mae.state_dict()}
-        stats = run_tta(factory, status['model'], tta_datasets, cfg.tta)
+        stats = run_tta(factory, status['model'], tta_datasets, cfg.tta, analyser=cfg.analyser)
         if cfg.wandb:
             wandb.log(stats)
         logger.info(stats)
         return
 
 
+    run_validate = False
+    run_evaluate = False
     # [NOTE]: Start MAE fine-tuning
+    logger.info('Run fine-tuning.')
     for name, param in model.image_encoder.named_parameters():
         if 'lora' in name:
             param.requires_grad = True
@@ -106,10 +125,13 @@ def process(rank, world_size, cfg):
     for name, param in model.mae.decoder.named_parameters():
         param.requires_grad = True
 
-    logger.info('finetuning parameters')
+    logger.info('fine-tuning parameters.')
     if dist.get_rank() == 0:
         for name, param in model.named_parameters():
             logger.info(f'{name}: {param.requires_grad}')
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    logger.info(f'Trainable parameters: {trainable_params}')
+
 
     ddp_model = DDP(model, device_ids=[rank], find_unused_parameters=True)
     model_without_ddp = ddp_model.module
@@ -126,54 +148,46 @@ def process(rank, world_size, cfg):
     lr_scheduler = build_scheduler(cfg.train, optimizer, len(train_loader))
 
     trainer = SimpleTrainer(train_loader, optimizer, lr_scheduler, cfg.train.clip_grad, rank)
+    loss = Loss(clip_weight=cfg.train.loss.clip_weight, mae_weight=cfg.train.loss.mae_weight)
+
     validater = SimpleValidater(val_loader, optimizer, rank)
     if dist.get_rank() == 0:
         # [NOTE]: Metrics is ImageNetV2 here.
         dataset = ImageNetV2Dataset(transform=transform('valid')) 
-        evaluator = ZeroShotEvaluator(tokenizer, dataset, ensemble_prompts, imagenet_classes, rank)
+        evaluator = ZeroShotEvaluator(tokenizer, dataset, simple_prompts, imagenet_classes, rank)
 
-    best_loss = float('inf')
-    best_tta_enhancement = float('-inf')
-    best_acc_5 = 0
-    best_acc_1 = 0
-
-    logger.info('Start training')
     for epoch in range(cfg.train.start_epoch, cfg.train.epochs):
         dist.barrier()
         stats = {'epoch': epoch}
         tta_table = None
         logger.info(f"Epoch: {epoch + 1}")
         ddp_model.train()
-        train_stats = trainer(ddp_model, epoch)
+        train_stats = trainer(ddp_model, loss, epoch)
         stats = stats | train_stats
 
-        ddp_model.eval()
-        with torch.no_grad():
-            valid_stats, image_table = validater(ddp_model)
-            stats = stats | valid_stats
+        if run_validate:
+            ddp_model.eval()
+            with torch.no_grad():
+                valid_stats, image_table = validater(ddp_model)
+                stats = stats | valid_stats
 
         # [NOTE]: evaluation, tta, and saving
         if dist.get_rank() == 0:
 
-            eval_stats = evaluator(ddp_model.module.clip)
-            stats = stats | eval_stats
+            if run_evaluate:
+                eval_stats = evaluator(ddp_model.module.clip)
+                stats = stats | eval_stats
 
-            if stats['valid']['mae_loss'] < best_loss:
-                logger.info("Best Model!")
-                best_loss = stats['valid']['mae_loss']
-                checkpoint = os.path.join(cfg.output, 'checkpoint.pth')
-                metrics = {'val_loss': stats['valid']['mae_loss'],
-                           'acc_1': stats['eval']['imagenet']['top1'],
-                           'acc_5': stats['eval']['imagenet']['top5']}
-                save_state = {
-                    'model': model_without_ddp.mae.state_dict(),
-                    'optimizer': optimizer.state_dict(),
-                    'lr_scheduler': lr_scheduler.state_dict(),
-                    'metrics': metrics,
-                    'epoch': epoch,
-                    'config': cfg
-                 }
-                torch.save(save_state, checkpoint)
+            logger.info("Save Model!")
+            checkpoint = os.path.join(cfg.output, f'checkpoint_{epoch:03}.pth')
+            save_state = {
+                'model': model_without_ddp.mae.state_dict(),
+                'optimizer': optimizer.state_dict(),
+                'lr_scheduler': lr_scheduler.state_dict(),
+                'epoch': epoch,
+                'config': cfg
+            }
+            torch.save(save_state, checkpoint)
 
             if ((epoch+1) % cfg.tta.run_freq == 0):
                 # [NOTE]: load best model
@@ -183,23 +197,12 @@ def process(rank, world_size, cfg):
                 else:
                     raise Exception('no checkpoint')
 
-                datasets = {}
-                for ds in cfg.data.dataset['tta']:
-                    datasets[ds] = cfg.data.dataset.meta[ds]
-
-                # [NOTE]: extract valid TTA method
-                tta_config = {}
-                for m in cfg.tta['params']:
-                    tta_config[m] = cfg.tta[m]
-                cfg.tta = OmegaConf.create(tta_config)
-
-                tta_stats = run_tta(factory, status['model'], datasets, cfg.tta)
+                tta_stats = run_tta(factory, status['model'], tta_datasets, cfg.tta)
                 stats = stats | tta_stats
 
         if cfg.wandb and dist.get_rank() == 0:
             logger.info(stats)
             wandb.log(stats)
-            wandb.log({'image': image_table})
         dist.barrier()
         logger.info(stats)
 
