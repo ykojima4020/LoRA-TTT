@@ -51,7 +51,7 @@ class ZeroShotEvaluator(Evaluator):
             self._zeroshot_weights = self._zeroshot_classifier(model, self._imagenet_classes, self._prompts)
         with torch.no_grad():
             top1, top5, n = 0., 0., 0.
-            for i, (images, target) in enumerate(tqdm(self._loader)):
+            for i, (images, target, _) in enumerate(tqdm(self._loader)):
                 images = images.to(self._device)
                 target = target.to(self._device)
                 

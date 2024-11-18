@@ -12,6 +12,8 @@ from misc.utils import AvgMeter, Summary, AverageMeter, ProgressMeter
 
 from pathlib import Path
 
+from gradcam import clip_grad_cam
+
 def build_tta_optimizer(param, config):
     #[NOTE]: all the trainable parameters is in an image encoder
     if config.optimizer == 'adam':
@@ -195,41 +197,65 @@ class TTARunner():
 
 class TTARunnerAnalyser():
 
-    def __init__(self, tta_handler, file=None):
+    def __init__(self, tta_handler, calib=False, gradcam=True):
         # [NOTE]: tta_handler includes Image Encoder Tuning, LoRA, TPT, and both.
         self.tta = tta_handler
+        self.calib = calib
+        self.gradcam = gradcam
 
     def __call__(self, tta_dataset, classes, prompts, dname=None, num_workers=4, pin_memory=True, device='cuda'):
 
-        if dname:
-            if isinstance(self.tta.get_loss(), MEMLoss):
-                loss_type = 'mem'
-            elif isinstance(self.tta.get_loss(), MAELoss):
-                loss_type = 'mae'
-            elif isinstance(self.tta.get_loss(), MAEMEMLossV2):
-                loss_type = 'mae_mem'
+        self.file_path = None
+        if isinstance(self.tta.get_loss(), MEMLoss):
+            loss_type = 'mem'
+        elif isinstance(self.tta.get_loss(), MAELoss):
+            loss_type = 'mae'
+        elif isinstance(self.tta.get_loss(), MAEMEMLossV2):
+            loss_type = 'mae_mem'
+        else:
+            raise ValueError
+    
+        if isinstance(self.tta, TextPromptTTA):
+            if self.tta.ctpt:
+                method = 'ctpt'
+            else:
+                method = 'tpt'
+        elif isinstance(self.tta, ImageEncoderTTA):
+            method = 'lora' 
+        else:
+            raise ValueError
+
+
+        if self.calib:
+            if dname:
+                self.file_path = Path(f'./calib/{dname}_{method}_{loss_type}.txt')
+            else:
+                self.file_path = Path(f'analysis.txt')
+    
+            if not self.file_path.exists():
+                self.file_path.touch()
+            else:
+                raise NotImplementedError('File already exists. No new file created.')
+
+        if self.gradcam: 
+            if dname:
+                self.original_clip_dir = Path(f'./gradcam/{dname}/clip/')
+                self.save_dir = Path(f'./gradcam/{dname}/{method}/{loss_type}')
+                self.original_clip_dir.mkdir(parents=True, exist_ok=True)
+                self.save_dir.mkdir(parents=True, exist_ok=True)
+                print(f'Directory {self.save_dir} created successfully!') 
             else:
                 raise ValueError
 
-            if isinstance(self.tta, TextPromptTTA):
-                if self.tta.ctpt:
-                    method = 'ctpt'
-                else:
-                    method = 'tpt'
-            elif isinstance(self.tta, ImageEncoderTTA):
-                method = 'lora' 
+            if dname:
+                self.file_path = Path(f'./gradcam/{dname}_{method}_{loss_type}.txt')
             else:
-                raise ValueError
+                self.file_path = Path(f'analysis.txt')
 
-            self.file_path = Path(f'./calib/{dname}_{method}_{loss_type}.txt')
-        else:
-            self.file_path = Path(f'analysis.txt')
-
-        if not self.file_path.exists():
-            self.file_path.touch()
-        else:
-            raise NotImplementedError('File already exists. No new file created.')
-
+            if not self.file_path.exists():
+                self.file_path.touch()
+            else:
+                raise NotImplementedError('File already exists. No new file created.')
 
         self.tta.reset_dataset(classes, prompts)
 
@@ -246,27 +272,40 @@ class TTARunnerAnalyser():
             [top1, top5],
             prefix='Test: ')
 
-        for i, (images, target) in tqdm(enumerate(tta_data_loader)):
-
+        for i, (images, target, path) in tqdm(enumerate(tta_data_loader)):
+            p = Path(path[0])
+            file_name = p.name
+            # cls = p.parent.parts[-1]
+ 
             for k in range(len(images)):
                 images[k] = images[k].to(device)
             target = target.to(device)
+            cls = str(target.item()) 
             image = images[0]
             images = torch.cat(images, dim=0)
 
             self.tta.reset_model()
             acc1, acc5, score_before_tta, score_max_before_tta = self.tta.accuracy(image, target, score=True)
             res_before_tta = True if acc1 == 100.0 else False
+            if self.gradcam:
+                before_image = self.tta.get_gradcam_image(image, target)
+                before_image.save(self.original_clip_dir / file_name)
+
             loss = self.tta.update(images)
             acc1, acc5, score_after_tta, score_max_after_tta = self.tta.accuracy(image, target, score=True)
             res_after_tta = True if acc1 == 100.0 else False
+            if self.gradcam:
+                after_image = self.tta.get_gradcam_image(image, target) 
+                after_image.save(self.save_dir / file_name)
 
             # measure accuracy and record loss
             top1.update(acc1[0], image.size(0))
             top5.update(acc5[0], image.size(0))
 
-            with open(self.file_path, 'a') as f:
-                f.write(f'{loss.item()} {res_before_tta} {res_after_tta} {score_before_tta.item()} {score_max_before_tta.item()} {score_after_tta.item()} {score_max_after_tta.item()}\n')
+            if self.file_path:
+                with open(self.file_path, 'a') as f:
+                    # f.write(f'{loss.item()} {res_before_tta} {res_after_tta} {score_before_tta.item()} {score_max_before_tta.item()} {score_after_tta.item()} {score_max_after_tta.item()}\n')
+                    f.write(f'{file_name},{loss.item()},{res_before_tta},{res_after_tta},{score_before_tta.item()},{score_max_before_tta.item()},{score_after_tta.item()},{score_max_after_tta.item()}\n')
 
             if (i+1) % 200 == 0:
                 progress.display(i)
@@ -446,6 +485,11 @@ class ImageEncoderTTA(TTAHandlerIF):
         # measure accuracy and record loss
         acc1, acc5 = accuracy(output, target, topk=(1, 5))
         return acc1, acc5, target_score, max_score
+
+    def get_gradcam_image(self, image, target):
+        gradcam_image = clip_grad_cam(self.model, image, target, self.text_embeddings)
+        self.set_trainable() # is needed?
+        return gradcam_image
 
 
 class TextPromptTTA(TTAHandlerIF):

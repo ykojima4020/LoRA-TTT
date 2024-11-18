@@ -8,9 +8,16 @@ try:
 except ImportError:
     BICUBIC = Image.BICUBIC
 
-import sys
-sys.path.append('./external/CLIP_Explainability/code/')
-from image_utils import show_cam_on_image
+import cv2
+def show_cam_on_image(img, mask, neg_saliency=False):
+
+    heatmap = cv2.applyColorMap(np.uint8(255 * mask), cv2.COLORMAP_JET)
+
+    heatmap = np.float32(heatmap) / 255
+    cam = heatmap + np.float32(img)
+    cam = cam / np.max(cam)
+    return cam
+
 
 def clip_grad_cam(model, image, target, text_embeddings):
 

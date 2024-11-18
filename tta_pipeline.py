@@ -83,7 +83,8 @@ def run_tta(factory, status, datasets, config, analyser=False):
         top1_before_tta, top5_before_tta =  evaluate_before_tta(factory, data_root, dataset, classes, prompts)
 
         if 'imagenet' in dataset['classes']:
-            tta_data = torchvision.datasets.ImageFolder(root=data_root, transform=tta_transform)
+            # tta_data = torchvision.datasets.ImageFolder(root=data_root, transform=tta_transform)
+            tta_data = ImageFolderWithPaths(root=data_root, transform=tta_transform)
         elif dataset['classes'] == 'aircraft':
             tta_data = Aircraft(data_root, 'test', None, tta_transform)
         else:
@@ -130,7 +131,8 @@ def evaluate_before_tta(factory, data_root, dataset, classes, prompts, device='c
     model = model.to(device)
 
     if 'imagenet' in dataset['classes']:
-        tta_test_dataset = torchvision.datasets.ImageFolder(root=data_root, transform=transform('val'))
+        # tta_test_dataset = torchvision.datasets.ImageFolder(root=data_root, transform=transform('val'))
+        tta_test_dataset = ImageFolderWithPaths(root=data_root, transform=transform('val'))
     elif dataset['classes'] == 'aircraft':
         tta_test_dataset = Aircraft(data_root, 'test', None, transform('val'))
     else:
@@ -253,4 +255,17 @@ def loss_selector(config):
 
 def count_elements_in_list(main_list, sublist):
     return sum(main_list.count(element) for element in sublist)
+
+
+from torchvision.datasets import ImageFolder
+
+class ImageFolderWithPaths(ImageFolder):
+    def __getitem__(self, index):
+        # 標準の ImageFolder データセットの機能を使用してデータとラベルを取得
+        original_tuple = super(ImageFolderWithPaths, self).__getitem__(index)
+        # データパスを取得
+        path = self.imgs[index][0]
+        # データ、ラベル、パスを返す
+        return original_tuple + (path,)
+
 

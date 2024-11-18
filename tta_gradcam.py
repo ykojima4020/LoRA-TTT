@@ -18,9 +18,14 @@ from misc.config import load_config
 from omegaconf import OmegaConf
 from misc.tpt_transforms import AugMixAugmenter
 
-import sys
-sys.path.append('./external/CLIP_Explainability/code/')
-from image_utils import show_cam_on_image
+def show_cam_on_image(img, mask, neg_saliency=False):
+
+    heatmap = cv2.applyColorMap(np.uint8(255 * mask), cv2.COLORMAP_JET)
+
+    heatmap = np.float32(heatmap) / 255
+    cam = heatmap + np.float32(img)
+    cam = cam / np.max(cam)
+    return cam
 
 
 def main():
