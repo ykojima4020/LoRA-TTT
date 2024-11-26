@@ -197,11 +197,12 @@ class TTARunner():
 
 class TTARunnerAnalyser():
 
-    def __init__(self, tta_handler, calib=False, gradcam=True):
+    def __init__(self, tta_handler, calib=False, gradcam=False, embed=True):
         # [NOTE]: tta_handler includes Image Encoder Tuning, LoRA, TPT, and both.
         self.tta = tta_handler
         self.calib = calib
         self.gradcam = gradcam
+        self.embed = embed
 
     def __call__(self, tta_dataset, classes, prompts, dname=None, num_workers=4, pin_memory=True, device='cuda'):
 
@@ -257,6 +258,21 @@ class TTARunnerAnalyser():
             else:
                 raise NotImplementedError('File already exists. No new file created.')
 
+        if self.embed:
+            embeddings = []
+            labels = []
+            if dname:
+                self.embed_save_path = Path(f'./embed/{dname}_{method}_{loss_type}_cls_token.npz')
+                # self.embed_save_path = Path(f'./embed/{dname}_clip_cls_token.npz')
+            else:
+                self.embed_save_path = Path(f'analysis.npz')
+
+            if not self.embed_save_path.exists():
+                self.embed_save_path.touch()
+            else:
+                raise NotImplementedError('File already exists. No new file created.')
+
+
         self.tta.reset_dataset(classes, prompts)
 
         # [NOTE]: TTA preparation
@@ -298,6 +314,10 @@ class TTARunnerAnalyser():
                 after_image = self.tta.get_gradcam_image(image, target) 
                 after_image.save(self.save_dir / file_name)
 
+            if self.embed:
+                embeddings.append(self.tta.get_embed(image))
+                labels.append(target.to('cpu').numpy())
+
             # measure accuracy and record loss
             top1.update(acc1[0], image.size(0))
             top5.update(acc5[0], image.size(0))
@@ -309,6 +329,15 @@ class TTARunnerAnalyser():
 
             if (i+1) % 200 == 0:
                 progress.display(i)
+
+            if self.embed:
+                if i == 5000:
+                    break
+
+        if self.embed:
+            embeddings = np.vstack(embeddings)
+            labels = np.concatenate(labels)
+            np.savez(self.embed_save_path, array=embeddings, array2=labels)
 
         return top1.avg.item(), top5.avg.item()
 
@@ -491,6 +520,14 @@ class ImageEncoderTTA(TTAHandlerIF):
         self.set_trainable() # is needed?
         return gradcam_image
 
+    def get_embed(self, image):
+        self.model.eval()
+        with torch.no_grad():
+            with torch.autocast(device_type='cuda', enabled=False):
+                # image_feature = self.model.clip.image_encode(image)
+                image_feature = self.model.image_encoder(image)[0][0, :, :]
+
+        return image_feature.to('cpu').numpy()
 
 class TextPromptTTA(TTAHandlerIF):
 
