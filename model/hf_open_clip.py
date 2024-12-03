@@ -12,14 +12,17 @@ class HFOpenCLIPImageEncoder(nn.Module):
 
     def __init__(self, model):
         super().__init__()
-        if not isinstance(model, transformers.models.clip.modeling_clip.CLIPVisionTransformer):
+        if isinstance(model, transformers.models.clip.modeling_clip.CLIPVisionTransformer):
+            self.ln_pre = model.pre_layrnorm
+        elif isinstance(model, transformers.models.owlvit.modeling_owlvit.OwlViTVisionTransformer):
+            self.ln_pre = model.pre_layernorm
+        else:
             raise TypeError
 
         self.patchify = model.embeddings.patch_embedding
         self.cls_token = model.embeddings.class_embedding                       # torch.Size([768])
         self.pos_embedding = model.embeddings.position_embedding.weight         # torch.Size([197, 768]) 
         self.transformer = model.encoder 
-        self.ln_pre = model.pre_layrnorm
         self.ln_post = model.post_layernorm
 
     def forward(self, x, shuffler=None): 
