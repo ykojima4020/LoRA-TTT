@@ -147,7 +147,7 @@ def evaluate_before_tta(factory, data_root, dataset, classes, prompts, device='c
 
 def build_tta_runner(factory, status, config, device='cuda', analyser=False):
 
-    params = ['tp', 'peft', 'ie', 'tp_peft']
+    params = ['tp', 'peft', 'ie', 'affine', 'tp_peft']
     n = count_elements_in_list(list(config.keys()), params)
     if n == 1:
         logger.info('Single TTA.')
@@ -179,12 +179,15 @@ def build_single_tta_runner(factory, status, config, device='cuda', analyser=Fal
     elif 'peft' in config.keys():
         # [NOTE]: Choose Loss for PEFT here.
         loss = loss_selector(config['peft'])
-        handler = ImageEncoderTTA(model, tokenizer, status, loss, config['peft'], lora=True)
-
+        handler = ImageEncoderTTA(model, tokenizer, status, loss, config['peft'], param='lora')
     elif 'ie' in config.keys():
         # [NOTE]: Choose Loss for PEFT here.
         loss = loss_selector(config['ie'])
-        handler = ImageEncoderTTA(model, tokenizer, status, loss, config['ie'], lora=False)
+        handler = ImageEncoderTTA(model, tokenizer, status, loss, config['ie'], param='ie')
+    elif 'affine' in config.keys():
+        # [NOTE]: Choose Loss for PEFT here.
+        loss = loss_selector(config['affine'])
+        handler = ImageEncoderTTA(model, tokenizer, status, loss, config['affine'], param='affine')
     elif 'tt_peft' in config.keys():
         raise NotImplementedError
     else:
