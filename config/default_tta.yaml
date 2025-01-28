@@ -170,6 +170,25 @@ tta:
     mem:
       weight: 1
 
+  affine:
+    batch_size: 64
+    epochs: 1
+    optimizer: 'adam'
+    lr: 1e-3
+    weight_decay: 0.2
+    eps: 1e-8
+    betas: [0.9, 0.999] # default
+    loss: ['mem']
+    selection_p: 0.1
+    layers: [11]
+    reset: true
+    adaptive: false
+    mae:
+      weight: 1
+    mem:
+      weight: 1
+
+
   tp:
     batch_size: 64
     epochs: 1

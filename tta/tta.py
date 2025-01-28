@@ -360,28 +360,37 @@ class TTAHandlerIF():
 
 class ImageEncoderTTA(TTAHandlerIF):
 
-    def __init__(self, model, tokenizer, status, loss, config, device='cuda', lora=True):
+    def __init__(self, model, tokenizer, status, loss, config, device='cuda', param='lora'):
         super().__init__(loss)
         self.model = model.to(device)
         self.tokenizer = tokenizer
         self.status = status
         self.config = config
         self.device = device
-        self.lora = lora
+        self.param = param
         self.text_embeddings = None
 
-        if self.lora:
+        if self.param == 'lora':
             for name, param in self.model.image_encoder.named_parameters():
                 if 'lora' in name:
                     param.requires_grad = True
-        else:
-            # model.clip._image_projector.proj.weight.requires_grad = True
+        elif self.param == 'ie':
             for i, layer in enumerate(self.model.image_encoder.transformer.layers):
                 if i in self.config.layers:
                     for name, param in layer.named_parameters():
                         if not 'lora' in name:
                             if 'self_attn' in name:
                                 param.requires_grad = True
+        elif self.param == 'affine':
+            for i, layer in enumerate(self.model.image_encoder.transformer.layers):
+                if i in self.config.layers:
+                    for name, param in layer.named_parameters():
+                        if not 'lora' in name:
+                            if 'layer_norm' in name:
+                                param.requires_grad = True
+        else:
+            raise NotImplementedError
+
         self.requires_grad_states = {name: param.requires_grad for name, param in self.model.named_parameters()}
 
         self.optimizer = build_tta_optimizer(self.model.image_encoder.parameters(), self.config)
