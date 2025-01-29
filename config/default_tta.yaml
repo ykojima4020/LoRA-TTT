@@ -147,6 +147,8 @@ tta:
     selection_p: 0.1
     reset: true
     adaptive: false
+    augmentation:
+      augmix: true
     mae:
       weight: 1
     mem:

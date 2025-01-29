@@ -49,8 +49,9 @@ def run_tta(factory, status, datasets, config, analyser=False):
                 normalize])
     batch_size = min([p.batch_size for n, p in config.items() if hasattr(p, 'batch_size')])
     logger.info(f"TTA Batch size: {batch_size}")
+    augmix = config.peft.augmentation.augmix
     tta_transform = AugMixAugmenter(base_transform, preprocess, n_views=batch_size-1,
-                                    augmix=False)
+                                    augmix=augmix)
 
     tta_runner = build_tta_runner(factory, status, config, analyser=analyser)
 

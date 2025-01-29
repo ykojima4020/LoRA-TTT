@@ -6,6 +6,10 @@
 from PIL import Image
 import torchvision.transforms as transforms
 
+import misc.augmix_ops as augmentations
+import numpy as np
+import torch
+
 # AugMix Transforms
 def get_preaugment(image_size=224):
     return transforms.Compose([
