@@ -188,6 +188,24 @@ tta:
     mem:
       weight: 1
 
+  vp:
+    batch_size: 64
+    epochs: 1
+    optimizer: 'adam'
+    lr: 1e-3
+    weight_decay: 0.2
+    eps: 1e-8
+    betas: [0.9, 0.999] # default
+    loss: ['mem', 'mae']
+    selection_p: 0.1
+    reset: true
+    adaptive: false
+    mae:
+      weight: 16
+    mem:
+      weight: 1
+
+
 
   tp:
     batch_size: 64

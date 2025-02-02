@@ -2,6 +2,7 @@ import torch
 import torch.distributed as dist
 from torch import nn
 import torch.nn.functional as F
+import torch.nn.init as init
 import transformers
 
 import diffdist.functional as diff_dist
@@ -24,6 +25,7 @@ class HFOpenCLIPImageEncoder(nn.Module):
         self.pos_embedding = model.embeddings.position_embedding.weight         # torch.Size([197, 768]) 
         self.transformer = model.encoder 
         self.ln_post = model.post_layernorm
+        self.visual_prompt = nn.Parameter(torch.zeros(4, 768))
 
     def forward(self, x, shuffler=None): 
         x = self.patchify(x)							# -> torch.Size([B, 768, 14, 14]) 
@@ -40,6 +42,8 @@ class HFOpenCLIPImageEncoder(nn.Module):
 
         cls_token_pos = self.cls_token + self.pos_embedding[0]			# torch.Size([768])
         x = torch.cat([cls_token_pos.expand(x.shape[0], 1, -1), x], dim=1) 	# -> torch.Size([B, 197, 768])
+        expanded_visual_prompt = self.visual_prompt.expand(x.shape[0], -1, -1)
+        x = torch.cat([x[:, :4, :] + expanded_visual_prompt, x[:, 4:, :]], dim=1)
 
         x = self.ln_pre(x)							# -> torch.Size([B, 197, 768])
         x = self.transformer(x).last_hidden_state				# -> torch.Size([B, 197, 768]) 

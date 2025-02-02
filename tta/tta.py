@@ -388,6 +388,8 @@ class ImageEncoderTTA(TTAHandlerIF):
                         if not 'lora' in name:
                             if 'layer_norm' in name:
                                 param.requires_grad = True
+        elif self.param == 'vp':
+            self.model.image_encoder.visual_prompt.requires_grad = True
         else:
             raise NotImplementedError
 
