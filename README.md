@@ -1,5 +1,17 @@
-# MAE-CLIP
-Abstract here.
+# LoRA-TTT: Low-Rank Test-Time Training for Vision-Language Models [ICMLW 2025]
+We propose LoRA-TTT, a novel test-time training (TTT) method for vision-language models
+(VLMs) that leverages Low-Rank Adaptation
+(LoRA), applied exclusively to the image encoder. Unlike prior TTT approaches that rely
+on computationally intensive text prompt tuning
+and entropy-based loss, LoRA-TTT updates only
+LoRA parameters at test time, achieving substantial performance gains with minimal memory and
+runtime overhead. We also introduce an efficient
+reconstruction loss tailored for TTT. Experiments
+on 15 datasets show that LoRA-TTT improves
+zero-shot top-1 accuracy of CLIP-ViT-B/16 by
+5.79% on OOD and 1.36% on fine-grained benchmarks, without using external models or caches.
+
+For more details, please check out our [paper](https://openreview.net/pdf/da85e060b3d9f3fb6801dd2ebbdee966a477b8e5.pdf)
 
 ## Overview
 This repository provides the following features to replicate our method:
