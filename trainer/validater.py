@@ -46,6 +46,3 @@ class SimpleValidater(Validater):
                            'mae_loss': self._mae_loss_meter.avg},
                  'logit_scale': logit_scale}
         return stats, table
-    
-    
-    

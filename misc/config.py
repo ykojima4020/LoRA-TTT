@@ -7,6 +7,7 @@
 # https://github.com/NVlabs/GroupViT/blob/main/LICENSE
 #
 # Written by Jiarui Xu
+# Added recursive load by Yuto Kojima
 # -------------------------------------------------------------------------
 
 import os
@@ -16,11 +17,13 @@ from omegaconf import OmegaConf
 
 def load_config(cfg_file):
     cfg = OmegaConf.load(cfg_file)
-    if '_base_' in cfg:
+
+    while "_base_" in cfg:
         if isinstance(cfg._base_, str):
             base_cfg = OmegaConf.load(osp.join(osp.dirname(cfg_file), cfg._base_))
         else:
             base_cfg = OmegaConf.merge(OmegaConf.load(f) for f in cfg._base_)
+        del cfg["_base_"]
         cfg = OmegaConf.merge(base_cfg, cfg)
     return cfg
 
@@ -36,6 +39,9 @@ def get_config(args):
 
     if hasattr(args, 'wandb') and args.wandb:
         cfg.wandb = args.wandb
+
+    if hasattr(args, 'analyser') and args.analyser:
+        cfg.analyser = args.analyser
 
     if hasattr(args, 'test') and args.test:
         cfg.test = args.test

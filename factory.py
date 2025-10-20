@@ -1,10 +1,13 @@
+import torch
+import torch.nn as nn
+
 import open_clip
 from transformers import DistilBertTokenizer
 from transformers import CLIPModel, CLIPProcessor
 
 from model.clip import CLIP
 from model.modules import TextEncoder, ProjectionHead
-from model.mae import ImageEncoder, MAEPixelDecoder, MAEFeatureDecoder, PixelMAE, FeatureMAE, FeatureMAEWithoutDecoder
+from model.mae import ImageEncoder, MAEPixelDecoder, MAEFeatureDecoder, PixelMAE, CLSTokenMAE, CLSTokenMAEWithoutDecoder
 from model.mae_clip import MAECLIP
 
 from model.models_rils import RILSMAEEncoder
@@ -134,9 +137,9 @@ class PretrainedOpenCLIPFactory(Factory):
                 emb_dim=self._emb_dim, num_layer=self._decoder_layer,
                 num_head=self._decoder_head)
             if self._mae_decoder:
-                mae = FeatureMAE(image_encoder, image_decoder, self._mask_ratio)
+                mae = CLSTokenMAE(image_encoder, image_decoder, self._mask_ratio)
             else:
-                mae = FeatureMAEWithoutDecoder(image_encoder, None, self._mask_ratio)
+                mae = CLSTokenMAEWithoutDecoder(image_encoder, None, self._mask_ratio)
             print(f"{type(mae).__name__} is created.")
         else:
             raise TypeError(f'{self._mae_loss_type} is invalid.')
@@ -158,6 +161,11 @@ class PretrainedOpenCLIPFactory(Factory):
 class PretrainedHFOpenCLIPFactory(Factory):
     def __init__(self, cfg, tpt=False):
         # [NOTE]: need to create a decoder
+        self._vit_type = cfg.image.encoder.name
+        valid_type = ['vit-b', 'vit-l', 'vit-tiny', 'vit-teeny']
+        if self._vit_type not in valid_type:
+            raise ValueError(f'The value must be one of {valid_type}, but got {self._vit_type}')
+
         self._image_size = cfg.image.encoder.size
         self._patch_size = cfg.image.encoder.patch_size
         self._emb_dim = cfg.image.encoder.embeddings
@@ -178,8 +186,20 @@ class PretrainedHFOpenCLIPFactory(Factory):
     def create(self, tpt=False):
 
         # [NOTE]: I don't know what kinds of dataset are used in the model.
-        hf_open_clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch16")
-        processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch16")
+        if self._vit_type == 'vit-b':
+            hf_open_clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch16")
+            processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch16")
+        elif self._vit_type == 'vit-l':
+            hf_open_clip_model = CLIPModel.from_pretrained("openai/clip-vit-large-patch14")
+            processor = CLIPProcessor.from_pretrained("openai/clip-vit-large-patch14")
+        elif self._vit_type == 'vit-tiny':
+            hf_open_clip_model = CLIPModel.from_pretrained("wkcn/TinyCLIP-ViT-40M-32-Text-19M-LAION400M")
+            processor = CLIPProcessor.from_pretrained("wkcn/TinyCLIP-ViT-40M-32-Text-19M-LAION400M")
+        elif self._vit_type == 'vit-teeny':
+            hf_open_clip_model = CLIPModel.from_pretrained("wkcn/TinyCLIP-ViT-8M-16-Text-3M-YFCC15M")
+            processor = CLIPProcessor.from_pretrained("wkcn/TinyCLIP-ViT-8M-16-Text-3M-YFCC15M")
+        else:
+            raise NotImplementedError
 
         image_encoder = HFOpenCLIPImageEncoder(hf_open_clip_model.vision_model)
         image_projector = HFOpenCLIPImageProjector(hf_open_clip_model.visual_projection)
@@ -192,8 +212,17 @@ class PretrainedHFOpenCLIPFactory(Factory):
                                 layers_to_transform=self._peft.layers_to_transform
                                )
             image_encoder = get_peft_model(image_encoder, config)
+
+            # [NOTE]: Trainable LoRA scaling
+            '''
+            for name, module in image_encoder.named_modules():
+                if 'lora_B.default' in name:
+                    scaled_module = DynamicScaledLinear(self._peft.r, self._emb_dim)
+                    parent_name = name.rsplit('.', 1)[0] if '.' in name else ''
+                    setattr(dict(image_encoder.named_modules())[parent_name], name.rsplit('.', 1)[-1], scaled_module)
+            '''
         else:
-            raise TypeError(f'{self._peft.name} is not supported.')
+            print(f'{self._peft.name} is not supported.')
 
         if self._tpt:
             text_encoder = TPTTextEncoder(hf_open_clip_model.text_model, hf_open_clip_model.dtype)
@@ -216,9 +245,9 @@ class PretrainedHFOpenCLIPFactory(Factory):
                 emb_dim=self._emb_dim, num_layer=self._decoder_layer,
                 num_head=self._decoder_head)
             if self._mae_decoder:
-                mae = FeatureMAE(image_encoder, image_decoder, self._mask_ratio)
+                mae = CLSTokenMAE(image_encoder, image_decoder, self._mask_ratio)
             else:
-                mae = FeatureMAEWithoutDecoder(image_encoder, None, self._mask_ratio)
+                mae = CLSTokenMAEWithoutDecoder(image_encoder, None, self._mask_ratio)
             print(f"{type(mae).__name__} is created.")
         else:
             raise TypeError(f'{self._mae_loss_type} is invalid.')
@@ -233,7 +262,58 @@ class PretrainedHFOpenCLIPFactory(Factory):
         tokenizer = processor.tokenizer
         tokenizer = BertTokenizer(tokenizer)
 
-        # [TODO]: should be set transform designed for
+        # [NOTE]: the transform should be the same for ViT-B and ViT-L
         transform = get_open_clip_vitb16_transforms
         return model, tokenizer, transform
 
+
+class ScaledLinear(torch.nn.Linear):
+    def __init__(self, in_features, out_features, bias=False):
+        super(ScaledLinear, self).__init__(in_features, out_features, bias)
+        # 学習可能なスケーリングパラメータを初期化
+        self.scale = nn.Parameter(torch.zeros(1))
+        min_value = -2
+        max_value = 2
+        self.scale.data.clamp_(min_value, max_value)
+
+        # 重みとバイアスを0で初期化
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        # 重みを0で初期化
+        nn.init.constant_(self.weight, 0)
+        if self.bias is not None:
+            # バイアスも0で初期化
+            nn.init.constant_(self.bias, 0)
+
+    def forward(self, input):
+        # nn.Linear のフォワードパス
+        output = super(ScaledLinear, self).forward(input)
+        # スケーリングパラメータで出力をスケーリング
+        return output * torch.exp(self.scale)
+
+
+class DynamicScaledLinear(torch.nn.Linear):
+    def __init__(self, in_features, out_features, bias=False):
+        super(DynamicScaledLinear, self).__init__(in_features, out_features, bias)
+
+        self.scale = 1
+
+        # 重みとバイアスを0で初期化
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        # 重みを0で初期化
+        nn.init.constant_(self.weight, 0)
+        if self.bias is not None:
+            # バイアスも0で初期化
+            nn.init.constant_(self.bias, 0)
+
+    def set_scale(self, scale):
+        self.scale = scale
+
+    def forward(self, input):
+        # nn.Linear のフォワードパス
+        output = super(DynamicScaledLinear, self).forward(input)
+        # スケーリングパラメータで出力をスケーリング
+        return output * self.scale

@@ -9,7 +9,17 @@
 # -------------------------------------------------------------------------
 
 from timm.scheduler.cosine_lr import CosineLRScheduler
+import torch
 
+class NoOpScheduler(torch.optim.lr_scheduler._LRScheduler):
+    def __init__(self, optimizer):
+        super(NoOpScheduler, self).__init__(optimizer)
+
+    def get_lr(self):
+        return [group['lr'] for group in self.optimizer.param_groups]
+
+    def step_update(self, *args, **kwargs):
+        pass
 
 def build_scheduler(config, optimizer, n_iter_per_epoch):
     num_steps = int(config.epochs * n_iter_per_epoch) # n_iter_per_epoch means the length of dataloader
@@ -26,6 +36,9 @@ def build_scheduler(config, optimizer, n_iter_per_epoch):
             cycle_limit=1,
             t_in_epochs=False,
         )
+    elif config.lr_scheduler.name == 'none':
+        lr_scheduler = NoOpScheduler(optimizer)
+        print('NoOpScheduler')
     else:
         raise NotImplementedError(f'lr scheduler {config.lr_scheduler.name} not implemented')
 

@@ -12,14 +12,17 @@ class HFOpenCLIPImageEncoder(nn.Module):
 
     def __init__(self, model):
         super().__init__()
-        if not isinstance(model, transformers.models.clip.modeling_clip.CLIPVisionTransformer):
+        if isinstance(model, transformers.models.clip.modeling_clip.CLIPVisionTransformer):
+            self.ln_pre = model.pre_layrnorm
+        elif isinstance(model, transformers.models.owlvit.modeling_owlvit.OwlViTVisionTransformer):
+            self.ln_pre = model.pre_layernorm
+        else:
             raise TypeError
 
         self.patchify = model.embeddings.patch_embedding
         self.cls_token = model.embeddings.class_embedding                       # torch.Size([768])
         self.pos_embedding = model.embeddings.position_embedding.weight         # torch.Size([197, 768]) 
         self.transformer = model.encoder 
-        self.ln_pre = model.pre_layrnorm
         self.ln_post = model.post_layernorm
 
     def forward(self, x, shuffler=None): 
@@ -32,6 +35,7 @@ class HFOpenCLIPImageEncoder(nn.Module):
              x, forward_indexes, backward_indexes = shuffler(x)
              x = rearrange(x, 't b c -> b t c')
         else:
+             forward_indexes = None
              backward_indexes = None
 
         cls_token_pos = self.cls_token + self.pos_embedding[0]			# torch.Size([768])
@@ -42,7 +46,7 @@ class HFOpenCLIPImageEncoder(nn.Module):
         x = self.ln_post(x)							# -> torch.Size([B, 197, 768]
 
         x = rearrange(x, 'b t c -> t b c')
-        return x, backward_indexes
+        return x, forward_indexes, backward_indexes
 
 class HFOpenCLIPImageProjector(nn.Module):
     def __init__(self, model):
@@ -86,9 +90,9 @@ class HFOpenCLIP(nn.Module):
         loss = 0.5 * (loss_img + loss_text)
         return loss, logit_scale
 
-    def image_encode(self, image):
+    def image_encode(self, image, shuffler=None):
         # Getting Image and Text Features
-        image_features = self._image_encoder(image)[0][0, :, :]
+        image_features = self._image_encoder(image, shuffler=shuffler)[0][0, :, :]
         image_embeddings = self._image_projector(image_features)
         return image_embeddings 
 
